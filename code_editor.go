@@ -2,6 +2,7 @@ package main
 
 import (
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"fyne.io/fyne/v2"
@@ -23,7 +24,11 @@ type codeEditor struct {
 	hasFocus       bool
 	ctrlDown       bool
 	pendingRefresh bool
+	completion     *completionPopup
+	completionOpen bool
+	completionTimer *time.Timer
 	OnChanged      func(string)
+	OnCompletion   func(row, col int)
 }
 
 func newCodeEditor() *codeEditor {
@@ -73,7 +78,9 @@ func (ed *codeEditor) KeyUp(key *fyne.KeyEvent) {
 }
 
 func (ed *codeEditor) TypedRune(r rune) {
-	ed.insertString(string(r))
+	s := string(r)
+	ed.insertString(s)
+	ed.scheduleCompletion(s)
 }
 
 func (ed *codeEditor) TypedKey(ev *fyne.KeyEvent) {
@@ -91,7 +98,14 @@ func (ed *codeEditor) TypedKey(ev *fyne.KeyEvent) {
 		case fyne.KeyA:
 			ed.selectAll()
 			return
+		case fyne.KeySpace:
+			ed.requestCompletion()
+			return
 		}
+	}
+
+	if ed.completion != nil && ed.completion.TypedKey(ev) {
+		return
 	}
 
 	switch ev.Name {
@@ -103,14 +117,18 @@ func (ed *codeEditor) TypedKey(ev *fyne.KeyEvent) {
 		ed.insertString("\n")
 	case fyne.KeyTab:
 		ed.insertString("\t")
-	case fyne.KeyLeft:
-		ed.moveLeft()
-	case fyne.KeyRight:
-		ed.moveRight()
-	case fyne.KeyUp:
-		ed.moveUp()
-	case fyne.KeyDown:
-		ed.moveDown()
+	case fyne.KeyLeft, fyne.KeyRight, fyne.KeyUp, fyne.KeyDown:
+		ed.hideCompletion()
+		switch ev.Name {
+		case fyne.KeyLeft:
+			ed.moveLeft()
+		case fyne.KeyRight:
+			ed.moveRight()
+		case fyne.KeyUp:
+			ed.moveUp()
+		case fyne.KeyDown:
+			ed.moveDown()
+		}
 	case fyne.KeyHome:
 		ed.cursorCol = 0
 		ed.refreshGrid()
@@ -128,7 +146,82 @@ func (ed *codeEditor) SetText(text string) {
 	ed.text = text
 	ed.cursorRow = 0
 	ed.cursorCol = 0
+	ed.hideCompletion()
 	ed.refreshGrid()
+}
+
+func (ed *codeEditor) CursorRow() int {
+	return ed.cursorRow
+}
+
+func (ed *codeEditor) CursorCol() int {
+	return ed.cursorCol
+}
+
+func (ed *codeEditor) initCompletion() {
+	if ed.completion != nil {
+		return
+	}
+	ed.completion = newCompletionPopup(ed, ed.applyCompletion, func() {
+		ed.completionOpen = false
+	})
+}
+
+func (ed *codeEditor) requestCompletion() {
+	if ed.OnCompletion != nil {
+		ed.OnCompletion(ed.cursorRow, ed.cursorCol)
+	}
+}
+
+func (ed *codeEditor) scheduleCompletion(typed string) {
+	if !shouldTriggerCompletion(ed.text, ed.cursorRow, ed.cursorCol, typed) {
+		return
+	}
+	if ed.completionTimer != nil {
+		ed.completionTimer.Stop()
+	}
+	ed.completionTimer = time.AfterFunc(200*time.Millisecond, func() {
+		fyne.Do(func() {
+			ed.requestCompletion()
+		})
+	})
+}
+
+func (ed *codeEditor) ShowCompletions(items []completionSuggestion) {
+	ed.initCompletion()
+	ed.completion.SetSuggestions(items, ed.cursorRow)
+	if len(items) == 0 {
+		ed.hideCompletion()
+		return
+	}
+	ed.completionOpen = true
+	ed.completion.Show()
+}
+
+func (ed *codeEditor) hideCompletion() {
+	if ed.completion != nil {
+		ed.completion.Hide()
+	}
+	ed.completionOpen = false
+}
+
+func (ed *codeEditor) applyCompletion(item completionSuggestion) {
+	ed.completionOpen = false
+	from := item.ReplaceFrom
+	to := item.ReplaceTo
+	if from < 0 {
+		from = 0
+	}
+	if to > len(ed.text) {
+		to = len(ed.text)
+	}
+	if from > to {
+		from, to = to, from
+	}
+	ed.text = ed.text[:from] + item.InsertText + ed.text[to:]
+	ed.setCursorFromOffset(from + len(item.InsertText))
+	ed.refreshGrid()
+	ed.notifyChanged()
 }
 
 func (ed *codeEditor) SetPlaceHolder(placeholder string) {

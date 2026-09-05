@@ -1,5 +1,56 @@
 # Changelog
 
+## Autocomplete com gopls
+
+### Novos arquivos
+
+| Arquivo | Descrição |
+|---|---|
+| `gopls.go` | Cliente LSP que inicia o `gopls serve` via stdio e expõe sync de documentos e completions |
+| `gopls_integration.go` | Integração do gopls com o editor (ciclo de vida, sincronização e busca de sugestões) |
+| `lsp_position.go` | Conversão de posições byte ↔ UTF-16 exigida pelo protocolo LSP |
+| `completion_popup.go` | Popup de sugestões inspirado no `CompletionEntry` do fyne-x |
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `code_editor.go` | Dispara completions (Ctrl+Space e digitação), exibe popup e aplica o item selecionado |
+| `main.go` | Inicia o gopls ao abrir pasta/arquivo `.go` e sincroniza o documento a cada alteração |
+| `settings.go` | Reinicia o gopls ao alterar o GOROOT em Propriedades |
+| `go.mod` | Adiciona `go.lsp.dev/protocol`, `go.lsp.dev/jsonrpc2`, `go.lsp.dev/uri` e `fyne.io/x/fyne` |
+
+### Cliente LSP (`gopls.go`)
+
+- Comunicação JSON-RPC via `go.lsp.dev/protocol` (sem montar mensagens manualmente)
+- `initialize` / `initialized` com a pasta do projeto como workspace
+- Sincronização de documentos com `didOpen` / `didChange` (sync completo)
+- Consulta `textDocument/completion` e converte `TextEdit` / `InsertText` em sugestões aplicáveis
+- Resolve o binário `gopls` com `resolveToolBinary()` (mesmo mecanismo do `goimports`)
+
+### Popup de sugestões (`completion_popup.go`)
+
+- Lista flutuante com `widget.PopUp` + `widget.List`, no padrão do `CompletionEntry` do fyne-x
+- Navegação com ↑/↓, aceitar com Tab/Enter, fechar com Esc
+- Posicionado próximo à linha do cursor no editor
+
+### Atalhos e gatilhos
+
+| Ação | Comportamento |
+|---|---|
+| **Ctrl+Space** | Dispara completion manualmente |
+| Digitar `.` | Abre sugestões após ponto (ex.: `fmt.`) |
+| Digitar identificador | Debounce de 200 ms após letras/números |
+| **Tab** / **Enter** | Aceita o item selecionado no popup |
+| **Esc** | Fecha o popup sem alterar o texto |
+
+### Requisitos
+
+- `gopls` instalado (`go install golang.org/x/tools/gopls@latest`)
+- Pasta de projeto aberta (**Arquivo → Abrir pasta...**) ou arquivo `.go` carregado
+
+---
+
 ## Realce de sintaxe Go no editor
 
 ### Novos arquivos
@@ -139,3 +190,4 @@ go build -o go-ide .
 4. Use **Arquivo → Formatar documento** (Shift+Alt+F) em arquivos Go
 5. Use **Executar → Executar arquivo** (F5) para rodar o arquivo atual — o terminal abre automaticamente e exibe apenas a saída
 6. Use **Arquivo → Propriedades** para configurar o caminho do Go
+7. Abra uma pasta com código Go e teste o autocomplete: digite `fmt.` ou use **Ctrl+Space** em um arquivo `.go`

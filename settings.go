@@ -125,5 +125,6 @@ func (ed *editor) showProperties() {
 			return
 		}
 		ed.setGoPath(entry.Text)
+		ed.restartGopls()
 	}, ed.window)
 }

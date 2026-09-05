@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -18,6 +19,7 @@ type editor struct {
 	entry       *codeEditor
 	explorer    *packageExplorer
 	terminal    *termPanel
+	gopls       *goplsClient
 	editorSplit *container.Split
 	filePath    string
 	rootPath    string
@@ -36,6 +38,7 @@ func main() {
 		app:    a,
 		window: w,
 		entry:  newCodeEditor(),
+		gopls:  newGoplsClient(),
 	}
 	ed.explorer = newPackageExplorer(ed.openFileFromExplorer)
 	ed.terminal = newTermPanel(w, "", ed.onTerminalTabsChanged)
@@ -43,6 +46,10 @@ func main() {
 	ed.entry.OnChanged = func(_ string) {
 		ed.modified = true
 		ed.updateTitle()
+		ed.syncGoplsDocument()
+	}
+	ed.entry.OnCompletion = func(row, col int) {
+		ed.fetchCompletions(row, col)
 	}
 
 	ed.buildMenu()
@@ -222,6 +229,7 @@ func (ed *editor) openFolder() {
 		ed.rootPath = uri.Path()
 		ed.explorer.setRoot(ed.rootPath)
 		ed.terminal.setWorkingDir(ed.rootPath)
+		ed.ensureGopls()
 		ed.window.SetTitle(filepath.Base(ed.rootPath) + " — Editor de Texto")
 	}, ed.window)
 }
@@ -239,10 +247,20 @@ func (ed *editor) loadFile(path string) {
 		return
 	}
 
+	if ed.filePath != "" && strings.HasSuffix(ed.filePath, ".go") {
+		_ = ed.gopls.closeDocument(ed.filePath)
+	}
+
 	ed.entry.SetText(string(data))
 	ed.filePath = path
 	ed.modified = false
 	ed.updateTitle()
+
+	if ed.rootPath == "" {
+		ed.rootPath = filepath.Dir(path)
+	}
+	ed.ensureGopls()
+	ed.syncGoplsDocument()
 }
 
 func (ed *editor) saveFile() {
