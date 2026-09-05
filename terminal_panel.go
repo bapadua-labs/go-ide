@@ -3,16 +3,18 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/fyne-io/terminal"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"github.com/fyne-io/terminal"
 )
 
 type termPanel struct {
@@ -21,6 +23,9 @@ type termPanel struct {
 	panel      fyne.CanvasObject
 	workingDir string
 	onChange   func(int)
+
+	readyMu sync.Mutex
+	ready   map[*terminal.Terminal]chan struct{}
 }
 
 func newTermPanel(w fyne.Window, startDir string, onChange func(int)) *termPanel {
@@ -28,6 +33,7 @@ func newTermPanel(w fyne.Window, startDir string, onChange func(int)) *termPanel
 		window:     w,
 		workingDir: startDir,
 		onChange:   onChange,
+		ready:      make(map[*terminal.Terminal]chan struct{}),
 	}
 	tp.tabs = container.NewDocTabs()
 	tp.tabs.CreateTab = func() *container.TabItem {
@@ -35,7 +41,10 @@ func newTermPanel(w fyne.Window, startDir string, onChange func(int)) *termPanel
 		fyne.Do(tp.notifyChange)
 		return tab
 	}
-	tp.tabs.OnClosed = func(_ *container.TabItem) {
+	tp.tabs.OnClosed = func(tab *container.TabItem) {
+		if t := tp.terminalFromTab(tab); t != nil {
+			tp.clearReady(t)
+		}
 		tp.notifyChange()
 	}
 
@@ -57,7 +66,7 @@ func (tp *termPanel) newTab() {
 	tab := tp.createTab(tp.workingDir)
 	tp.tabs.Append(tab)
 	tp.tabs.Select(tab)
-	tp.window.Canvas().Focus(tp.terminalFromTab(tab))
+	tp.focusTerminal(tp.terminalFromTab(tab))
 	tp.notifyChange()
 }
 
@@ -80,6 +89,7 @@ func (tp *termPanel) createTab(startDir string) *container.TabItem {
 	if dir != "" {
 		t.SetStartDir(dir)
 	}
+	tp.armReady(t)
 
 	tab := container.NewTabItem("Terminal", t)
 
@@ -101,12 +111,49 @@ func (tp *termPanel) createTab(startDir string) *container.TabItem {
 	go func() {
 		_ = t.RunLocalShell()
 		fyne.Do(func() {
+			tp.clearReady(t)
 			tp.tabs.Remove(tab)
 			tp.notifyChange()
 		})
 	}()
 
 	return tab
+}
+
+func (tp *termPanel) armReady(t *terminal.Terminal) {
+	ch := make(chan struct{})
+	var once sync.Once
+	t.SetReadWriter(terminal.ReadWriterConfiguratorFunc(
+		func(r io.Reader, w io.WriteCloser) (io.Reader, io.WriteCloser) {
+			once.Do(func() { close(ch) })
+			return r, w
+		},
+	))
+
+	tp.readyMu.Lock()
+	tp.ready[t] = ch
+	tp.readyMu.Unlock()
+}
+
+func (tp *termPanel) clearReady(t *terminal.Terminal) {
+	tp.readyMu.Lock()
+	delete(tp.ready, t)
+	tp.readyMu.Unlock()
+}
+
+func (tp *termPanel) waitReady(t *terminal.Terminal, timeout time.Duration) bool {
+	tp.readyMu.Lock()
+	ch := tp.ready[t]
+	tp.readyMu.Unlock()
+	if ch == nil {
+		return false
+	}
+	select {
+	case <-ch:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 func (tp *termPanel) setWorkingDir(dir string) {
@@ -120,7 +167,14 @@ func (tp *termPanel) setWorkingDir(dir string) {
 		return
 	}
 	t.SetStartDir(dir)
-	_, _ = t.Write([]byte("cd " + shellQuote(dir) + "\n"))
+	go func() {
+		if !tp.waitReady(t, 10*time.Second) {
+			return
+		}
+		fyne.Do(func() {
+			_, _ = t.Write([]byte("cd " + shellQuote(dir) + "\n"))
+		})
+	}()
 }
 
 func (tp *termPanel) activeTerminal() *terminal.Terminal {
@@ -136,6 +190,17 @@ func (tp *termPanel) terminalFromTab(tab *container.TabItem) *terminal.Terminal 
 	}
 	term, _ := tab.Content.(*terminal.Terminal)
 	return term
+}
+
+func (tp *termPanel) focusActive() {
+	tp.focusTerminal(tp.activeTerminal())
+}
+
+func (tp *termPanel) focusTerminal(t *terminal.Terminal) {
+	if t == nil || tp.window == nil {
+		return
+	}
+	tp.window.Canvas().Focus(t)
 }
 
 func (tp *termPanel) runCommand(command string) {
@@ -171,13 +236,14 @@ func (tp *termPanel) whenReady(fn func(*terminal.Terminal)) {
 		return
 	}
 	go func() {
-		for range 200 {
-			if _, err := t.Write([]byte("")); err == nil {
-				fyne.Do(func() { fn(t) })
-				return
-			}
-			time.Sleep(50 * time.Millisecond)
+		// O fyne-io/terminal inicia com discardWriter (Write sempre "sucesso").
+		// Só consideramos pronto quando SetReadWriter roda no open() do PTY real.
+		if !tp.waitReady(t, 10*time.Second) {
+			return
 		}
+		// Pequena folga para o shell imprimir o prompt inicial.
+		time.Sleep(100 * time.Millisecond)
+		fyne.Do(func() { fn(t) })
 	}()
 }
 

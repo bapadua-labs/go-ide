@@ -1,5 +1,35 @@
 # Changelog
 
+## Terminal: PTY, pasta do projeto e Ctrl+X
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `terminal_panel.go` | `whenReady` passa a esperar o PTY real via `SetReadWriter` (não o `discardWriter` inicial); `setWorkingDir` só envia `cd` após o shell pronto; `focusActive` ao usar o painel |
+| `main.go` | Ao reabrir o terminal (Ctrl+` / menu), foca o widget do terminal e força refresh do layout |
+| `run.go` | `ensureTerminalOpen` foca o terminal; F5 resolve o binário `go` com `resolveGoBinary` |
+| `settings.go` | `resolveGoBinary`: usa o GOROOT configurado se válido, senão o `go` do PATH |
+
+### Problemas corrigidos
+
+**Comandos descartados:** o terminal da lib inicia com `discardWriter`, cujo `Write` sempre “sucede”. O `whenReady` antigo considerava o shell pronto imediatamente e F5/`cd`/saída iam para o lixo até uma segunda tentativa.
+
+**Pasta do projeto:** ao abrir outra pasta, o `cd` no shell ativo era enviado sem esperar o PTY — podia sumir e o cwd do terminal ficava divergente do root do projeto.
+
+**Ctrl+X no terminal:** ao reabrir o painel sem criar aba nova, o foco permanecia no editor; Ctrl+X virava recortar no código em vez de ir para o shell (`0x18`).
+
+**Instalação Go divergente:** F5 usava só `{GOROOT}/bin/go`. Com preferência/GOROOT desatualizado, a execução falhava mesmo com `go` válido no PATH.
+
+### Solução
+
+1. `armReady` / `SetReadWriter` sinaliza prontidão só quando o PTY real abre
+2. `setWorkingDir` e `whenReady` aguardam esse sinal (até ~10 s) antes de escrever no terminal
+3. `toggleTerminal`, `openTerminalTab` e `ensureTerminalOpen` focam o terminal ativo
+4. `resolveGoBinary` tenta o GOROOT das Propriedades e faz fallback para `LookPath("go")`
+
+---
+
 ## Seleção de texto no editor
 
 ### Alterações
@@ -323,6 +353,8 @@ Salvo em `~/.config/go-ide/state.json`:
 2. `whenReady` aguarda o terminal aceitar entrada (até ~10 s) antes de executar
 3. `go run` é executado diretamente com `exec.Command`, capturando stdout e stderr
 4. Apenas o resultado é exibido no terminal (com `stty -echo` + `printf | base64 -d` em uma linha no Linux, evitando heredoc e prompts PS2)
+
+> **Nota:** o critério de prontidão do item 2 ainda falhava com o `discardWriter` da lib; ver a entrada **Terminal: PTY, pasta do projeto e Ctrl+X**.
 
 ---
 

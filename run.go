@@ -20,8 +20,13 @@ func (ed *editor) runCurrentFile() {
 		ed.writeToFile(ed.filePath)
 	}
 
+	goBin, err := resolveGoBinary(ed.goPath())
+	if err != nil {
+		dialog.ShowError(err, ed.window)
+		return
+	}
+
 	dir := filepath.Dir(ed.filePath)
-	goBin := goBinaryInRoot(ed.goPath())
 	fileName := filepath.Base(ed.filePath)
 
 	ed.ensureTerminalOpen()
@@ -34,5 +39,5 @@ func (ed *editor) ensureTerminalOpen() {
 		ed.terminal.newTab()
 	}
 	ed.syncTerminalPanel()
-	ed.editorSplit.Refresh()
+	ed.terminal.focusActive()
 }

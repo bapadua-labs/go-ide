@@ -32,6 +32,25 @@ func goBinaryInRoot(root string) string {
 	return toolBinaryInRoot(root, "go")
 }
 
+func resolveGoBinary(goroot string) (string, error) {
+	name := "go"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if goroot != "" {
+		path := goBinaryInRoot(goroot)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, nil
+		}
+	}
+	if path, err := exec.LookPath(name); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf(
+		"go não encontrado; confira o GOROOT em Propriedades ou o PATH do sistema",
+	)
+}
+
 func resolveToolBinary(goroot, tool string) (string, error) {
 	name := tool
 	if runtime.GOOS == "windows" {

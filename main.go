@@ -244,11 +244,13 @@ func (ed *editor) syncTerminalPanel() {
 		offset = 0.72
 	}
 	ed.editorSplit.SetOffset(offset)
+	ed.editorSplit.Refresh()
 }
 
 func (ed *editor) openTerminalTab() {
 	ed.termPanelOpen = true
 	ed.terminal.newTab()
+	ed.syncTerminalPanel()
 }
 
 func (ed *editor) toggleTerminal() {
@@ -265,6 +267,9 @@ func (ed *editor) toggleTerminal() {
 		ed.termPanelOpen = true
 	}
 	ed.syncTerminalPanel()
+	if ed.termPanelOpen {
+		ed.terminal.focusActive()
+	}
 }
 
 func (ed *editor) updateTitle() {
