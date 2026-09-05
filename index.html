@@ -141,7 +141,7 @@ go build -o go-ide .
             <ul>
               <li>Linux com suporte a PTY para o terminal</li>
               <li>Abra uma <strong>pasta de projeto</strong> para o gopls funcionar</li>
-              <li>Configure o GOROOT em <strong>Arquivo → Propriedades</strong> se necessário</li>
+              <li>Configure o GOROOT em <strong>Arquivo → Propriedades</strong> (ou use <strong>Detectar</strong>) se necessário</li>
             </ul>
           </div>
         </div>
@@ -323,6 +323,7 @@ go build -o go-ide .
               <li>Abre o terminal automaticamente se estiver fechado e foca o painel</li>
               <li>Aguarda o PTY real (não o <code>discardWriter</code> inicial) antes de executar</li>
               <li>Resolve <code>go</code> pelo GOROOT configurado ou pelo PATH</li>
+              <li>Injeta <code>GOROOT</code> no ambiente do processo (evita preferência desatualizada)</li>
               <li>Captura stdout/stderr sem ecoar o comando</li>
               <li>Sem prompts <code>&gt;</code> de heredoc na saída</li>
             </ul>
@@ -412,6 +413,19 @@ go build -o go-ide .
         <p class="lead">Histórico das principais funcionalidades implementadas.</p>
 
         <div class="changelog">
+          <article class="changelog-entry">
+            <h3>Detecção e correção do GOROOT</h3>
+            <p>
+              Preferência inválida/antiga é revalidada na abertura; descoberta via
+              env, <code>go env</code> e PATH; botão Detectar em Propriedades;
+              <code>GOROOT</code> injetado no gopls, F5 e goimports.
+            </p>
+            <ul>
+              <li><code>settings.go</code> — <code>ensureGoRoot</code>, <code>defaultGoPath</code>, <code>withGoRootEnv</code></li>
+              <li><code>gopls.go</code>, <code>format.go</code>, <code>terminal_panel.go</code> — env consistente nos filhos</li>
+            </ul>
+          </article>
+
           <article class="changelog-entry">
             <h3>Terminal: PTY, pasta do projeto e Ctrl+X</h3>
             <p>
