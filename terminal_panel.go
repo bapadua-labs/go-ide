@@ -212,11 +212,12 @@ func (tp *termPanel) runCommand(command string) {
 	})
 }
 
-func (tp *termPanel) runGoFile(goBin, dir, file string) {
+func (tp *termPanel) runGoFile(goBin, goroot, dir, file string) {
 	tp.whenReady(func(t *terminal.Terminal) {
 		go func() {
 			cmd := exec.Command(goBin, "run", file)
 			cmd.Dir = dir
+			cmd.Env = withGoRootEnv(os.Environ(), goroot)
 			out, err := cmd.CombinedOutput()
 			text := string(out)
 			if err != nil && text == "" {

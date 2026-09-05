@@ -16,16 +16,66 @@ import (
 
 const prefGoPath = "goPath"
 
+// defaultGoPath descobre o GOROOT atual do ambiente (env, `go env`, PATH, runtime).
 func defaultGoPath() string {
-	return runtime.GOROOT()
+	candidates := []string{
+		strings.TrimSpace(os.Getenv("GOROOT")),
+	}
+	if out, err := exec.Command("go", "env", "GOROOT").Output(); err == nil {
+		candidates = append(candidates, strings.TrimSpace(string(out)))
+	}
+	if bin, err := exec.LookPath("go"); err == nil {
+		if resolved, err := filepath.EvalSymlinks(bin); err == nil {
+			bin = resolved
+		}
+		candidates = append(candidates, filepath.Dir(filepath.Dir(bin)))
+	}
+	candidates = append(candidates, runtime.GOROOT())
+
+	for _, root := range candidates {
+		root = filepath.Clean(strings.TrimSpace(root))
+		if root == "" || root == "." {
+			continue
+		}
+		if validateGoRoot(root) == nil {
+			return root
+		}
+	}
+	return filepath.Clean(runtime.GOROOT())
 }
 
 func (ed *editor) goPath() string {
-	return ed.app.Preferences().StringWithFallback(prefGoPath, defaultGoPath())
+	stored := strings.TrimSpace(ed.app.Preferences().String(prefGoPath))
+	if stored != "" {
+		stored = filepath.Clean(stored)
+		if validateGoRoot(stored) == nil {
+			return stored
+		}
+	}
+	return defaultGoPath()
+}
+
+// ensureGoRoot corrige preferência antiga/inválida para o GOROOT detectado agora.
+func (ed *editor) ensureGoRoot() {
+	stored := strings.TrimSpace(ed.app.Preferences().String(prefGoPath))
+	discovered := defaultGoPath()
+	if discovered == "" {
+		return
+	}
+	if stored != "" {
+		cleaned := filepath.Clean(stored)
+		if validateGoRoot(cleaned) == nil {
+			if cleaned != stored {
+				ed.setGoPath(cleaned)
+			}
+			return
+		}
+	}
+	ed.setGoPath(discovered)
 }
 
 func (ed *editor) setGoPath(path string) {
-	ed.app.Preferences().SetString(prefGoPath, path)
+	ed.app.Preferences().SetString(prefGoPath, filepath.Clean(strings.TrimSpace(path)))
 }
 
 func goBinaryInRoot(root string) string {
@@ -38,7 +88,7 @@ func resolveGoBinary(goroot string) (string, error) {
 		name += ".exe"
 	}
 	if goroot != "" {
-		path := goBinaryInRoot(goroot)
+		path := goBinaryInRoot(filepath.Clean(goroot))
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
 			return path, nil
 		}
@@ -74,7 +124,8 @@ func resolveToolBinary(goroot, tool string) (string, error) {
 
 func goToolBinDirs(goroot string) []string {
 	var dirs []string
-	if goroot != "" {
+	goroot = filepath.Clean(strings.TrimSpace(goroot))
+	if goroot != "" && goroot != "." {
 		dirs = append(dirs, filepath.Join(goroot, "bin"))
 	}
 	if gobin := strings.TrimSpace(goEnvValue(goroot, "GOBIN")); gobin != "" {
@@ -89,35 +140,61 @@ func goToolBinDirs(goroot string) []string {
 }
 
 func goEnvValue(goroot, key string) string {
-	if goroot == "" {
-		return ""
-	}
-	out, err := exec.Command(goBinaryInRoot(goroot), "env", key).Output()
+	goBin, err := resolveGoBinary(goroot)
 	if err != nil {
 		return ""
 	}
-	return string(out)
+	out, err := exec.Command(goBin, "env", key).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func toolBinaryInRoot(root, tool string) string {
 	if runtime.GOOS == "windows" {
 		tool += ".exe"
 	}
-	return filepath.Join(root, "bin", tool)
+	return filepath.Join(filepath.Clean(root), "bin", tool)
 }
 
 func validateGoRoot(path string) error {
-	if path == "" {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "" || path == "." {
 		return fmt.Errorf("informe o caminho da instalação do Go")
 	}
-	info, err := os.Stat(goBinaryInRoot(path))
+	bin := goBinaryInRoot(path)
+	info, err := os.Stat(bin)
 	if err != nil {
-		return fmt.Errorf("não foi encontrado o executável go em %s", goBinaryInRoot(path))
+		return fmt.Errorf("não foi encontrado o executável go em %s", bin)
 	}
 	if info.IsDir() {
 		return fmt.Errorf("o caminho do executável go é um diretório")
 	}
 	return nil
+}
+
+// withGoRootEnv garante GOROOT consistente para processos filhos (gopls, go run, etc.).
+func withGoRootEnv(base []string, goroot string) []string {
+	goroot = filepath.Clean(strings.TrimSpace(goroot))
+	if goroot == "" || goroot == "." {
+		return base
+	}
+	prefix := "GOROOT="
+	out := make([]string, 0, len(base)+1)
+	replaced := false
+	for _, kv := range base {
+		if strings.HasPrefix(kv, prefix) {
+			out = append(out, prefix+goroot)
+			replaced = true
+			continue
+		}
+		out = append(out, kv)
+	}
+	if !replaced {
+		out = append(out, prefix+goroot)
+	}
+	return out
 }
 
 func (ed *editor) showProperties() {
@@ -131,12 +208,19 @@ func (ed *editor) showProperties() {
 			if err != nil || uri == nil {
 				return
 			}
-			entry.SetText(uri.Path())
+			entry.SetText(filepath.Clean(uri.Path()))
 		}, ed.window)
 	})
 
+	detect := widget.NewButton("Detectar", func() {
+		entry.SetText(defaultGoPath())
+	})
+
 	form := []*widget.FormItem{
-		widget.NewFormItem("Caminho do Go (GOROOT)", container.NewBorder(nil, nil, nil, browse, entry)),
+		widget.NewFormItem(
+			"Caminho do Go (GOROOT)",
+			container.NewBorder(nil, nil, nil, container.NewHBox(detect, browse), entry),
+		),
 	}
 
 	dialog.ShowForm("Propriedades", "Salvar", "Cancelar", form, func(ok bool) {

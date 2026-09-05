@@ -61,6 +61,7 @@ func main() {
 	ed.entry.onHover = ed.fetchHover
 	ed.entry.onSignatureHelp = ed.fetchSignatureHelp
 	ed.setupGoplsFeatures()
+	ed.ensureGoRoot()
 
 	ed.buildMenu()
 	ed.setupShortcuts()

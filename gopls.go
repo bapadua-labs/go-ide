@@ -66,7 +66,7 @@ func (g *goplsClient) start(goroot, rootPath string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.Command(bin, "serve")
 	cmd.Dir = rootPath
-	cmd.Env = os.Environ()
+	cmd.Env = withGoRootEnv(os.Environ(), goroot)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

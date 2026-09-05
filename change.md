@@ -1,5 +1,29 @@
 # Changelog
 
+## Detecção e correção do GOROOT
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `settings.go` | `defaultGoPath` descobre GOROOT via env/`go env`/PATH; `ensureGoRoot` corrige preferência inválida; botão Detectar; `withGoRootEnv` |
+| `settings_test.go` | Testes de validação, limpeza de barra final e substituição de `GOROOT` no env |
+| `main.go` | Chama `ensureGoRoot` na inicialização |
+| `gopls.go` / `run.go` / `format.go` / `terminal_panel.go` | Processos filhos (gopls, `go run`, goimports) recebem `GOROOT` consistente |
+
+### Problema corrigido
+
+**GOROOT desatualizado:** a preferência Fyne (`goPath`) podia ficar com caminho antigo ou com barra final, e era usada sem revalidar. O IDE “não encontrava” o Go mesmo com instalação válida no PATH.
+
+### Solução
+
+1. Na abertura, valida a preferência; se inválida, rediscover e grava o GOROOT atual
+2. Fallback: `$GOROOT` → `go env GOROOT` → diretório do `go` no PATH → `runtime.GOROOT()`
+3. Propriedades: botão **Detectar** e normalização com `filepath.Clean`
+4. Injeta `GOROOT=` no ambiente do gopls, F5 e goimports
+
+---
+
 ## Terminal: PTY, pasta do projeto e Ctrl+X
 
 ### Alterações

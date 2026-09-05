@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,7 @@ func formatGoSource(src, goroot, srcdir string) (string, error) {
 	}
 	cmd := exec.Command(bin, args...)
 	cmd.Stdin = strings.NewReader(src)
+	cmd.Env = withGoRootEnv(os.Environ(), goroot)
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

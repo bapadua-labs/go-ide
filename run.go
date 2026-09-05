@@ -30,7 +30,7 @@ func (ed *editor) runCurrentFile() {
 	fileName := filepath.Base(ed.filePath)
 
 	ed.ensureTerminalOpen()
-	ed.terminal.runGoFile(goBin, dir, fileName)
+	ed.terminal.runGoFile(goBin, ed.goPath(), dir, fileName)
 }
 
 func (ed *editor) ensureTerminalOpen() {
