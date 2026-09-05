@@ -20,6 +20,27 @@ func TestFileTabTitle(t *testing.T) {
 	if got := fileTabTitle("/tmp/proj/main.go", true); got != "main.go *" {
 		t.Fatalf("dirty: got %q", got)
 	}
+	if got := fileTabTitleWithPreview("/tmp/proj/main.go", false, true); got != "∘ main.go" {
+		t.Fatalf("preview: got %q", got)
+	}
+	if got := fileTabTitleWithPreview("/tmp/proj/main.go", true, true); got != "∘ main.go *" {
+		t.Fatalf("preview dirty: got %q", got)
+	}
+}
+
+func TestFindPreviewTab(t *testing.T) {
+	tabs := []*fileTab{
+		{path: "a.go"},
+		{path: "b.go", preview: true},
+		{path: "c.go"},
+	}
+	if findPreviewTab(tabs) != tabs[1] {
+		t.Fatal("expected preview tab b")
+	}
+	tabs[1].preview = false
+	if findPreviewTab(tabs) != nil {
+		t.Fatal("expected no preview tab")
+	}
 }
 
 func TestFindFileTabByPath(t *testing.T) {

@@ -3,6 +3,7 @@ package main
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestValidateExplorerName(t *testing.T) {
@@ -83,5 +84,22 @@ func TestRewritePathPrefix(t *testing.T) {
 	}
 	if got := rewritePathPrefix(oldFile, oldFile, filepath.Join(root, "b.go")); got != filepath.Join(root, "b.go") {
 		t.Errorf("file rename: got %q", got)
+	}
+}
+
+func TestIsExplorerDoubleClick(t *testing.T) {
+	now := time.Now()
+	delay := 300 * time.Millisecond
+	if !isExplorerDoubleClick("a.go", "a.go", now.Add(-100*time.Millisecond), now, delay) {
+		t.Fatal("same uid within delay should be double click")
+	}
+	if isExplorerDoubleClick("a.go", "b.go", now.Add(-100*time.Millisecond), now, delay) {
+		t.Fatal("different uid should not be double click")
+	}
+	if isExplorerDoubleClick("a.go", "a.go", now.Add(-500*time.Millisecond), now, delay) {
+		t.Fatal("outside delay should not be double click")
+	}
+	if isExplorerDoubleClick("", "a.go", now, now, delay) {
+		t.Fatal("empty previous uid should not be double click")
 	}
 }

@@ -27,6 +27,9 @@ func formatGoSource(src, goroot, srcdir string) (string, error) {
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			msg := strings.TrimSpace(string(exitErr.Stderr))
+			if msg == "" {
+				msg = strings.TrimSpace(string(out))
+			}
 			if msg != "" {
 				return "", fmt.Errorf("goimports: %s", msg)
 			}
@@ -36,13 +39,14 @@ func formatGoSource(src, goroot, srcdir string) (string, error) {
 	return string(out), nil
 }
 
-func (ed *editor) formatDocument() {
-	if !ed.hasActiveEditor() {
-		return
+// applyGoFormat formata o buffer ativo com goimports (imports + gofmt).
+// Sem efeito se não houver editor ou o arquivo não for .go.
+func (ed *editor) applyGoFormat() error {
+	if !ed.hasActiveEditor() || ed.entry == nil {
+		return nil
 	}
 	if ed.filePath != "" && !strings.HasSuffix(ed.filePath, ".go") {
-		dialog.ShowInformation("Formatar", "Apenas arquivos .go podem ser formatados.", ed.window)
-		return
+		return nil
 	}
 
 	srcdir := ed.rootPath
@@ -53,14 +57,29 @@ func (ed *editor) formatDocument() {
 	src := ed.entry.Text()
 	formatted, err := formatGoSource(src, ed.goPath(), srcdir)
 	if err != nil {
-		dialog.ShowError(err, ed.window)
-		return
+		return err
 	}
 	if formatted == src {
-		return
+		return nil
 	}
 
+	row, col := ed.entry.CursorRow(), ed.entry.CursorCol()
 	ed.entry.SetText(formatted)
+	ed.entry.SetCursor(row, col)
 	ed.setActiveModified(true)
 	ed.syncGoplsDocument()
+	return nil
+}
+
+func (ed *editor) formatDocument() {
+	if !ed.hasActiveEditor() {
+		return
+	}
+	if ed.filePath != "" && !strings.HasSuffix(ed.filePath, ".go") {
+		dialog.ShowInformation("Formatar", "Apenas arquivos .go podem ser formatados.", ed.window)
+		return
+	}
+	if err := ed.applyGoFormat(); err != nil {
+		dialog.ShowError(err, ed.window)
+	}
 }

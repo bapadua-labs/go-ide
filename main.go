@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -365,8 +366,12 @@ func (ed *editor) openFolderPath(path string) {
 	ed.buildMenu()
 }
 
-func (ed *editor) openFileFromExplorer(path string) {
-	ed.loadFile(path)
+func (ed *editor) openFileFromExplorer(path string, permanent bool) {
+	if permanent {
+		ed.openOrFocusFile(path)
+		return
+	}
+	ed.openOrFocusFilePreview(path)
 }
 
 func (ed *editor) loadFile(path string) {
@@ -381,7 +386,7 @@ func (ed *editor) saveFile() {
 		ed.saveFileAs()
 		return
 	}
-	ed.writeToFile(ed.filePath)
+	ed.formatThenWrite(ed.filePath)
 }
 
 func (ed *editor) saveFileAs() {
@@ -395,6 +400,11 @@ func (ed *editor) saveFileAs() {
 		defer writer.Close()
 
 		path := writer.URI().Path()
+		if strings.HasSuffix(path, ".go") {
+			if ferr := ed.applyGoFormat(); ferr != nil {
+				dialog.ShowError(ferr, ed.window)
+			}
+		}
 		if err := ed.writeTo(path, writer); err != nil {
 			dialog.ShowError(err, ed.window)
 			return
@@ -402,6 +412,15 @@ func (ed *editor) saveFileAs() {
 
 		ed.updateActiveTabPath(path)
 	}, ed.window)
+}
+
+func (ed *editor) formatThenWrite(path string) {
+	if strings.HasSuffix(path, ".go") {
+		if err := ed.applyGoFormat(); err != nil {
+			dialog.ShowError(err, ed.window)
+		}
+	}
+	ed.writeToFile(path)
 }
 
 func (ed *editor) writeToFile(path string) {

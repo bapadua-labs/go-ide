@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.0.6 — goimports no PATH + formatar ao salvar
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `settings.go` | `withGoRootEnv` coloca `$GOROOT/bin` no início do `PATH` |
+| `format.go` | `applyGoFormat` compartilhado entre menu e save |
+| `main.go` | Ctrl+S / Salvar aplica goimports antes de gravar arquivos `.go` |
+| `settings_test.go` | Testes de PATH com GOROOT/bin |
+
+### Problema corrigido
+
+**Resumo:** o goimports falhava com `go: executable file not found in $PATH` porque só o `GOROOT` era injetado, sem o diretório `bin` no PATH (comum ao abrir a IDE pelo menu gráfico).
+
+### Solução
+
+- Processos filhos (goimports, gopls, terminal) passam a achar o `go` via `$GOROOT/bin`
+- **Ctrl+S** / Salvar em `.go` roda goimports (imports + formatação) antes de gravar; se falhar, mostra o erro e ainda assim salva o buffer
+
+---
+
+## v1.0.5 — Preview de arquivo no explorador (clique / duplo clique)
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `explorer.go` | Clique simples e duplo clique nos itens da árvore |
+| `editor_tabs.go` | Aba temporária (preview) vs permanente; pin ao editar/salvar |
+| `main.go` | Explorador abre preview ou permanente conforme o clique |
+| `editor_tabs_test.go` / `explorer_test.go` | Cobertura de título preview e detecção de duplo clique |
+
+### Comportamento
+
+- **Clique** no explorador abre o arquivo em aba **temporária** (prefixo `∘`); outro clique simples substitui essa aba
+- **Duplo clique** fixa a aba como **permanente** (como no Cursor/VS Code)
+- Editar ou salvar uma aba temporária também a torna permanente
+- Abrir pelo menu, ir para definição etc. continua abrindo aba permanente
+
+---
+
 ## v1.0.4 — Menu de contexto no explorador (renomear e excluir)
 
 ### Alterações

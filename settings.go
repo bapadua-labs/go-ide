@@ -174,27 +174,60 @@ func validateGoRoot(path string) error {
 	return nil
 }
 
-// withGoRootEnv garante GOROOT consistente para processos filhos (gopls, go run, etc.).
+// withGoRootEnv garante GOROOT e PATH com $GOROOT/bin para processos filhos
+// (gopls, go run, goimports precisam achar o binário `go`).
 func withGoRootEnv(base []string, goroot string) []string {
 	goroot = filepath.Clean(strings.TrimSpace(goroot))
 	if goroot == "" || goroot == "." {
 		return base
 	}
-	prefix := "GOROOT="
-	out := make([]string, 0, len(base)+1)
-	replaced := false
+	binDir := filepath.Join(goroot, "bin")
+	prefixGoRoot := "GOROOT="
+	prefixPath := "PATH="
+
+	out := make([]string, 0, len(base)+2)
+	replacedGoRoot := false
+	replacedPath := false
 	for _, kv := range base {
-		if strings.HasPrefix(kv, prefix) {
-			out = append(out, prefix+goroot)
-			replaced = true
-			continue
+		switch {
+		case strings.HasPrefix(kv, prefixGoRoot):
+			out = append(out, prefixGoRoot+goroot)
+			replacedGoRoot = true
+		case strings.HasPrefix(kv, prefixPath):
+			pathVal := kv[len(prefixPath):]
+			out = append(out, prefixPath+prependPathDir(pathVal, binDir))
+			replacedPath = true
+		default:
+			out = append(out, kv)
 		}
-		out = append(out, kv)
 	}
-	if !replaced {
-		out = append(out, prefix+goroot)
+	if !replacedGoRoot {
+		out = append(out, prefixGoRoot+goroot)
+	}
+	if !replacedPath {
+		out = append(out, prefixPath+binDir)
 	}
 	return out
+}
+
+func prependPathDir(pathVal, dir string) string {
+	dir = filepath.Clean(dir)
+	if dir == "" || dir == "." {
+		return pathVal
+	}
+	if pathVal == "" {
+		return dir
+	}
+	parts := filepath.SplitList(pathVal)
+	filtered := make([]string, 0, len(parts)+1)
+	filtered = append(filtered, dir)
+	for _, p := range parts {
+		if p == "" || filepath.Clean(p) == dir {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+	return strings.Join(filtered, string(os.PathListSeparator))
 }
 
 func (ed *editor) showProperties() {

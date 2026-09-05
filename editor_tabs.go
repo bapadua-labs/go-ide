@@ -13,19 +13,37 @@ import (
 type fileTab struct {
 	path     string // vazio = sem título
 	modified bool
+	preview  bool // true = aba temporária (substituída por outro clique simples no explorador)
 	entry    *codeEditor
 	item     *container.TabItem
 }
 
 func fileTabTitle(path string, modified bool) string {
+	return fileTabTitleWithPreview(path, modified, false)
+}
+
+func fileTabTitleWithPreview(path string, modified, preview bool) string {
 	name := "Sem título"
 	if path != "" {
 		name = filepath.Base(path)
+	}
+	if preview {
+		// DocTabs não expõe itálico; marcador visual leve estilo preview.
+		name = "∘ " + name
 	}
 	if modified {
 		return name + " *"
 	}
 	return name
+}
+
+func findPreviewTab(tabs []*fileTab) *fileTab {
+	for _, t := range tabs {
+		if t != nil && t.preview {
+			return t
+		}
+	}
+	return nil
 }
 
 func findFileTabByPath(tabs []*fileTab, path string) *fileTab {
@@ -127,14 +145,29 @@ func (ed *editor) refreshTabTitle(tab *fileTab) {
 	if tab == nil || tab.item == nil || ed.fileTabs == nil {
 		return
 	}
-	tab.item.Text = fileTabTitle(tab.path, tab.modified)
+	tab.item.Text = fileTabTitleWithPreview(tab.path, tab.modified, tab.preview)
 	ed.fileTabs.Refresh()
+}
+
+func (ed *editor) pinTab(tab *fileTab) {
+	if tab == nil || !tab.preview {
+		return
+	}
+	tab.preview = false
+	ed.refreshTabTitle(tab)
+}
+
+func (ed *editor) findPreviewTab() *fileTab {
+	return findPreviewTab(ed.tabs)
 }
 
 func (ed *editor) markActiveModified() {
 	tab := ed.activeFileTab()
 	if tab == nil {
 		return
+	}
+	if tab.preview {
+		tab.preview = false
 	}
 	tab.modified = true
 	ed.modified = true
@@ -242,13 +275,25 @@ func (ed *editor) anyDirtyTabs() bool {
 	return false
 }
 
-// openOrFocusFile foca a aba existente do caminho ou cria uma nova com o conteúdo do disco.
+// openOrFocusFile foca a aba existente ou cria uma permanente com o conteúdo do disco.
 func (ed *editor) openOrFocusFile(path string) *fileTab {
+	return ed.openOrFocusFileMode(path, false)
+}
+
+// openOrFocusFilePreview abre em aba temporária (substitui a preview anterior, se houver).
+func (ed *editor) openOrFocusFilePreview(path string) *fileTab {
+	return ed.openOrFocusFileMode(path, true)
+}
+
+func (ed *editor) openOrFocusFileMode(path string, preview bool) *fileTab {
 	path = normalizePath(path)
 	if path == "" {
 		return nil
 	}
 	if tab := ed.findTabByPath(path); tab != nil {
+		if !preview {
+			ed.pinTab(tab)
+		}
 		ed.activateTab(tab)
 		return tab
 	}
@@ -258,17 +303,55 @@ func (ed *editor) openOrFocusFile(path string) *fileTab {
 		dialog.ShowError(err, ed.window)
 		return nil
 	}
+	content := string(data)
 
-	tab := ed.createFileTab(path, string(data))
+	if preview {
+		if existing := ed.findPreviewTab(); existing != nil {
+			if existing.modified {
+				ed.pinTab(existing)
+			} else {
+				ed.loadPathIntoTab(existing, path, content)
+				existing.preview = true
+				ed.refreshTabTitle(existing)
+				ed.activateTab(existing)
+				ed.afterOpenFile(path)
+				return existing
+			}
+		}
+	}
+
+	tab := ed.createFileTab(path, content)
+	tab.preview = preview
+	ed.refreshTabTitle(tab)
 	ed.fileTabs.Append(tab.item)
 	ed.activateTab(tab)
+	ed.afterOpenFile(path)
+	return tab
+}
 
+func (ed *editor) loadPathIntoTab(tab *fileTab, path, content string) {
+	if tab == nil || tab.entry == nil {
+		return
+	}
+	path = normalizePath(path)
+	old := tab.path
+	if old != "" && strings.HasSuffix(old, ".go") && !samePath(old, path) {
+		_ = ed.gopls.closeDocument(old)
+	}
+	tab.path = path
+	tab.modified = false
+	tab.entry.SetText(content)
+	tab.entry.SetDiagnostics(nil)
+	tab.entry.SetCursor(0, 0)
+	ed.refreshTabTitle(tab)
+}
+
+func (ed *editor) afterOpenFile(path string) {
 	if ed.rootPath == "" {
 		ed.rootPath = filepath.Dir(path)
 	}
 	ed.ensureGopls()
 	ed.syncGoplsDocument()
-	return tab
 }
 
 func (ed *editor) reloadTab(tab *fileTab) {
@@ -302,6 +385,7 @@ func (ed *editor) updateActiveTabPath(path string) {
 		return
 	}
 	tab.modified = false
+	ed.pinTab(tab)
 	ed.updateTabPath(tab, path)
 }
 

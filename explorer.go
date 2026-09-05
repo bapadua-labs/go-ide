@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -27,13 +28,15 @@ type packageExplorer struct {
 	tree          *widget.Tree
 	panel         fyne.CanvasObject
 	window        fyne.Window
-	onFileSelect  func(string)
+	onFileSelect  func(path string, permanent bool)
 	onPathDeleted func(string)
 	onPathRenamed func(oldPath, newPath string)
 	selectingOnly bool
+	lastClickUID  string
+	lastClickAt   time.Time
 }
 
-// explorerTreeItem é o conteúdo de um nó da árvore; captura clique direito.
+// explorerTreeItem é o conteúdo de um nó da árvore; captura clique e clique direito.
 type explorerTreeItem struct {
 	widget.BaseWidget
 	pe    *packageExplorer
@@ -42,6 +45,7 @@ type explorerTreeItem struct {
 	label *widget.Label
 }
 
+var _ fyne.Tappable = (*explorerTreeItem)(nil)
 var _ fyne.SecondaryTappable = (*explorerTreeItem)(nil)
 
 func newExplorerTreeItem(pe *packageExplorer) *explorerTreeItem {
@@ -58,6 +62,13 @@ func (i *explorerTreeItem) CreateRenderer() fyne.WidgetRenderer {
 	return widget.NewSimpleRenderer(container.NewHBox(i.icon, i.label))
 }
 
+func (i *explorerTreeItem) Tapped(_ *fyne.PointEvent) {
+	if i.pe == nil || i.uid == "" {
+		return
+	}
+	i.pe.handleItemTap(i.uid)
+}
+
 func (i *explorerTreeItem) TappedSecondary(ev *fyne.PointEvent) {
 	if i.pe == nil || i.uid == "" {
 		return
@@ -65,7 +76,7 @@ func (i *explorerTreeItem) TappedSecondary(ev *fyne.PointEvent) {
 	i.pe.showContextMenu(i.uid, ev)
 }
 
-func newPackageExplorer(win fyne.Window, onFileSelect func(string)) *packageExplorer {
+func newPackageExplorer(win fyne.Window, onFileSelect func(string, bool)) *packageExplorer {
 	pe := &packageExplorer{
 		window:       win,
 		onFileSelect: onFileSelect,
@@ -84,12 +95,11 @@ func newPackageExplorer(win fyne.Window, onFileSelect func(string)) *packageExpl
 		if pe.selectingOnly {
 			return
 		}
+		// Space / clique na área do nó (fora do conteúdo): abre preview.
 		if uid == "" || pe.isBranch(uid) {
 			return
 		}
-		if pe.onFileSelect != nil {
-			pe.onFileSelect(uid)
-		}
+		pe.openSelectedFile(uid, false)
 	}
 
 	title := widget.NewLabelWithStyle("Explorador", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
@@ -105,6 +115,35 @@ func newPackageExplorer(win fyne.Window, onFileSelect func(string)) *packageExpl
 		pe.tree,
 	)
 	return pe
+}
+
+func (pe *packageExplorer) handleItemTap(uid string) {
+	pe.selectNodeOnly(uid)
+	if uid == "" || pe.isBranch(uid) {
+		return
+	}
+	permanent := isExplorerDoubleClick(pe.lastClickUID, uid, pe.lastClickAt, time.Now(), explorerDoubleClickDelay())
+	pe.lastClickUID = uid
+	pe.lastClickAt = time.Now()
+	pe.openSelectedFile(uid, permanent)
+}
+
+func (pe *packageExplorer) openSelectedFile(uid string, permanent bool) {
+	if pe.onFileSelect == nil {
+		return
+	}
+	pe.onFileSelect(uid, permanent)
+}
+
+func explorerDoubleClickDelay() time.Duration {
+	if fyne.CurrentApp() != nil && fyne.CurrentApp().Driver() != nil {
+		return fyne.CurrentApp().Driver().DoubleTapDelay()
+	}
+	return 300 * time.Millisecond
+}
+
+func isExplorerDoubleClick(prevUID, uid string, prevAt, now time.Time, delay time.Duration) bool {
+	return uid != "" && uid == prevUID && now.Sub(prevAt) < delay
 }
 
 func (pe *packageExplorer) setRoot(path string) {
