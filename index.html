@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="go-ide — IDE desktop em Go com editor de código, terminal integrado, realce de sintaxe e integração LSP com gopls."
+    />
+    <title>go-ide — IDE Go com gopls</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23282c34'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='monospace' font-size='10' font-weight='700' fill='%2361afef'%3Ego%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <div class="bg" aria-hidden="true"></div>
+
+    <header class="hero">
+      <p class="eyebrow">bapadua · Fyne · gopls</p>
+      <h1 class="brand">go-ide</h1>
+      <p class="tagline">
+        IDE desktop em Go com editor de código, explorador de arquivos, terminal
+        integrado, realce de sintaxe, rainbow brackets e suporte completo ao
+        <strong>gopls</strong> via LSP.
+      </p>
+      <div class="cta">
+        <div class="install">
+          <code id="install-cmd">go install github.com/bapadua/go-ide@latest</code>
+          <button
+            type="button"
+            class="btn-copy"
+            data-copy="go install github.com/bapadua/go-ide@latest"
+            aria-label="Copiar comando"
+          >
+            Copiar
+          </button>
+        </div>
+        <a
+          class="btn-link"
+          href="https://github.com/bapadua/go-ide"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          GitHub
+        </a>
+      </div>
+      <nav class="nav-toc" aria-label="Seções">
+        <a href="#visao">Visão geral</a>
+        <a href="#instalacao">Instalação</a>
+        <a href="#editor">Editor</a>
+        <a href="#gopls">gopls / LSP</a>
+        <a href="#terminal">Terminal</a>
+        <a href="#atalhos">Atalhos</a>
+        <a href="#changelog">Changelog</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="section" id="visao">
+        <h2>Visão geral</h2>
+        <p class="lead">
+          O <strong>go-ide</strong> é um editor de texto desktop construído com
+          <a href="https://fyne.io/" target="_blank" rel="noopener">Fyne</a>,
+          focado em desenvolvimento Go. Combina um editor com
+          <code>TextGrid</code>, tema escuro inspirado em One Dark Pro, terminal
+          PTY embutido e comunicação JSON-RPC com o
+          <a href="https://pkg.go.dev/golang.org/x/tools/gopls" target="_blank" rel="noopener">gopls</a>.
+        </p>
+
+        <div class="feature-grid">
+          <div class="feature-card">
+            <h4>Explorador de arquivos</h4>
+            <p>Navegue pela árvore do projeto e abra arquivos com um clique.</p>
+          </div>
+          <div class="feature-card">
+            <h4>Editor com numeração</h4>
+            <p>TextGrid com gutter de linhas, caret piscante e clique para posicionar o cursor.</p>
+          </div>
+          <div class="feature-card">
+            <h4>Realce de sintaxe Go</h4>
+            <p>Funções, tipos, packages, keywords, strings, comentários e números coloridos.</p>
+          </div>
+          <div class="feature-card">
+            <h4>Rainbow brackets</h4>
+            <p>Parênteses, colchetes e chaves coloridos por nível de aninhamento.</p>
+          </div>
+          <div class="feature-card">
+            <h4>Autocomplete gopls</h4>
+            <p>Sugestões inline com filtro local, snippets e debounce inteligente.</p>
+          </div>
+          <div class="feature-card">
+            <h4>Navegação LSP</h4>
+            <p>Definição, referências, rename, hover, signature help e diagnósticos.</p>
+          </div>
+          <div class="feature-card">
+            <h4>Terminal integrado</h4>
+            <p>Shell interativo com execução de <code>go run</code> via F5.</p>
+          </div>
+          <div class="feature-card">
+            <h4>Persistência de estado</h4>
+            <p>Reabre a última pasta e mantém lista de pastas recentes.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="instalacao">
+        <h2>Instalação e requisitos</h2>
+        <p class="lead">Go 1.26+, Fyne e gopls instalados no sistema.</p>
+
+        <h3>Compilar a partir do código</h3>
+        <div class="code-block">
+          <pre><code><span class="comment"># clonar e compilar</span>
+git clone https://github.com/bapadua/go-ide.git
+<span class="kw">cd</span> go-ide
+go build -o go-ide .
+./go-ide</code></pre>
+        </div>
+
+        <h3>Dependências externas</h3>
+        <div class="two-col">
+          <div>
+            <ul>
+              <li><strong>Go</strong> — 1.26 ou superior</li>
+              <li><strong>gopls</strong> — <code>go install golang.org/x/tools/gopls@latest</code></li>
+              <li><strong>goimports</strong> — usado na formatação (Shift+Alt+F)</li>
+            </ul>
+          </div>
+          <div>
+            <ul>
+              <li>Linux com suporte a PTY para o terminal</li>
+              <li>Abra uma <strong>pasta de projeto</strong> para o gopls funcionar</li>
+              <li>Configure o GOROOT em <strong>Arquivo → Propriedades</strong> se necessário</li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>Configuração persistente</h3>
+        <p class="lead">Estado salvo em <code>~/.config/go-ide/state.json</code>:</p>
+        <div class="code-block">
+          <pre><code>{
+  <span class="str">"last_folder"</span>: <span class="str">"/caminho/para/projeto"</span>,
+  <span class="str">"recent_folders"</span>: [
+    <span class="str">"/caminho/para/projeto"</span>,
+    <span class="str">"/outro/projeto"</span>
+  ]
+}</code></pre>
+        </div>
+        <ul class="tips">
+          <li>A última pasta aberta é restaurada automaticamente ao iniciar.</li>
+          <li>Até 10 pastas recentes no menu <strong>Arquivo</strong>.</li>
+          <li>Pastas inexistentes são removidas ao carregar a configuração.</li>
+        </ul>
+      </section>
+
+      <section class="section" id="editor">
+        <h2>Editor de código</h2>
+        <p class="lead">
+          Substitui o <code>MultiLineEntry</code> padrão do Fyne por um editor
+          customizado com <code>TextGrid</code>, renderer próprio e camada de
+          sugestões inline.
+        </p>
+
+        <h3>Paleta de sintaxe</h3>
+        <div class="palette">
+          <div class="palette-item">
+            <span class="swatch" style="background: #61afef"></span>
+            <div>
+              <strong style="color: #61afef">Funções</strong>
+              <p><code>Hello</code>, <code>Println</code></p>
+            </div>
+          </div>
+          <div class="palette-item">
+            <span class="swatch" style="background: #e5c07b"></span>
+            <div>
+              <strong style="color: #e5c07b">Structs / tipos</strong>
+              <p><code>User</code>, tipos declarados com <code>type</code></p>
+            </div>
+          </div>
+          <div class="palette-item">
+            <span class="swatch" style="background: #56b6c2"></span>
+            <div>
+              <strong style="color: #56b6c2">Packages</strong>
+              <p><code>main</code>, paths e aliases em <code>import</code></p>
+            </div>
+          </div>
+          <div class="palette-item">
+            <span class="swatch" style="background: #c678dd"></span>
+            <div>
+              <strong style="color: #c678dd">Keywords</strong>
+              <p><code>func</code>, <code>type</code>, <code>struct</code>, <code>import</code></p>
+            </div>
+          </div>
+          <div class="palette-item">
+            <span class="swatch" style="background: #98c379"></span>
+            <div>
+              <strong style="color: #98c379">Strings</strong>
+              <p><code>"texto"</code>, <code>`raw`</code></p>
+            </div>
+          </div>
+          <div class="palette-item">
+            <span class="swatch" style="background: #5c6370"></span>
+            <div>
+              <strong style="color: #5c6370">Comentários</strong>
+              <p><code>//</code> e <code>/* */</code></p>
+            </div>
+          </div>
+        </div>
+
+        <h3>Rainbow brackets</h3>
+        <p class="lead">
+          Coloração de <code>()</code>, <code>[]</code> e <code>{}</code> por
+          nível de aninhamento. Ignora conteúdo dentro de strings e comentários.
+          Brackets sem par correspondente aparecem em vermelho.
+        </p>
+
+        <h3>Cursor e edição</h3>
+        <ul class="tips">
+          <li>Caret vertical piscante (2px), visível a cada 530 ms com foco.</li>
+          <li>Clique do mouse reposiciona o cursor na linha/coluna correta.</li>
+          <li>Pilha de undo com até 100 entradas (Ctrl+Z).</li>
+          <li>Formatação via <code>goimports</code> (Shift+Alt+F).</li>
+        </ul>
+      </section>
+
+      <section class="section" id="gopls">
+        <h2>Integração gopls (LSP)</h2>
+        <p class="lead">
+          Cliente LSP via <code>go.lsp.dev/protocol</code> que inicia
+          <code>gopls serve</code> por stdio e sincroniza documentos com
+          <code>didOpen</code> / <code>didChange</code>.
+        </p>
+
+        <h3>Autocomplete</h3>
+        <div class="feature-grid">
+          <div class="feature-card">
+            <h4>Lista inline</h4>
+            <p>Painel de 6 linhas dentro do editor, sem roubar foco do teclado.</p>
+          </div>
+          <div class="feature-card">
+            <h4>Filtro local</h4>
+            <p>Digite para filtrar; reconsulta o gopls com debounce de 120–200 ms.</p>
+          </div>
+          <div class="feature-card">
+            <h4>Snippets</h4>
+            <p>Placeholders <code>${1:nome}</code> e <code>$0</code> expandidos ao aceitar.</p>
+          </div>
+          <div class="feature-card">
+            <h4>Gatilhos</h4>
+            <p>Ctrl+Space manual; ponto (<code>.</code>) após identificador; Enter/Tab para aceitar.</p>
+          </div>
+        </div>
+
+        <h3>Navegação e análise</h3>
+        <table class="shortcuts">
+          <thead>
+            <tr>
+              <th>Recurso</th>
+              <th>Descrição</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Ir para definição</strong></td>
+              <td>Abre o arquivo e posiciona o cursor na declaração (stdlib e módulos).</td>
+            </tr>
+            <tr>
+              <td><strong>Encontrar referências</strong></td>
+              <td>Lista todas as ocorrências; clique navega até ela.</td>
+            </tr>
+            <tr>
+              <td><strong>Renomear símbolo</strong></td>
+              <td>Renomeia em todos os arquivos do workspace via <code>WorkspaceEdit</code>.</td>
+            </tr>
+            <tr>
+              <td><strong>Diagnósticos</strong></td>
+              <td>Erros e avisos sublinhados em tempo real via <code>PublishDiagnostics</code>.</td>
+            </tr>
+            <tr>
+              <td><strong>Signature help</strong></td>
+              <td>Ao digitar <code>(</code> — balão com assinatura e parâmetro ativo.</td>
+            </tr>
+            <tr>
+              <td><strong>Hover</strong></td>
+              <td>Mouse sobre identificador — documentação do gopls (debounce 400 ms).</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p class="callout">
+          Popups LSP convertem markdown para texto simples, quebram linhas em até
+          480 px e são posicionados <strong>abaixo</strong> da linha do cursor —
+          evitando sobreposição ilegível sobre o código.
+        </p>
+      </section>
+
+      <section class="section" id="terminal">
+        <h2>Terminal e execução</h2>
+        <p class="lead">
+          Painel de terminal PTY embutido na parte inferior do editor. A execução
+          via F5 usa <code>exec.Command</code> diretamente, exibindo apenas a
+          saída do programa.
+        </p>
+
+        <div class="two-col">
+          <div>
+            <h3>Execução (F5)</h3>
+            <ul>
+              <li>Abre o terminal automaticamente se estiver fechado</li>
+              <li>Aguarda o shell ficar pronto antes de executar</li>
+              <li>Captura stdout/stderr sem ecoar o comando</li>
+              <li>Sem prompts <code>&gt;</code> de heredoc na saída</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Formatação</h3>
+            <ul>
+              <li><strong>Shift+Alt+F</strong> — formata com <code>goimports</code></li>
+              <li>Resolve binário via mesmo mecanismo do gopls</li>
+              <li>Menu <strong>Arquivo → Formatar documento</strong></li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="atalhos">
+        <h2>Atalhos de teclado</h2>
+
+        <h3>Arquivo e edição</h3>
+        <table class="shortcuts">
+          <thead>
+            <tr>
+              <th>Ação</th>
+              <th>Atalho</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Desfazer</td><td><kbd>Ctrl</kbd> + <kbd>Z</kbd></td></tr>
+            <tr><td>Copiar / Colar / Recortar</td><td><kbd>Ctrl</kbd> + <kbd>C</kbd> / <kbd>V</kbd> / <kbd>X</kbd></td></tr>
+            <tr><td>Selecionar tudo</td><td><kbd>Ctrl</kbd> + <kbd>A</kbd></td></tr>
+            <tr><td>Formatar documento</td><td><kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>F</kbd></td></tr>
+            <tr><td>Fechar IDE</td><td><kbd>Ctrl</kbd> + <kbd>W</kbd></td></tr>
+          </tbody>
+        </table>
+
+        <h3>Navegação LSP</h3>
+        <table class="shortcuts">
+          <thead>
+            <tr>
+              <th>Ação</th>
+              <th>Atalho</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Ir para definição</td><td><kbd>F12</kbd> ou <kbd>Ctrl</kbd> + clique</td></tr>
+            <tr><td>Encontrar referências</td><td><kbd>Shift</kbd> + <kbd>F12</kbd></td></tr>
+            <tr><td>Renomear símbolo</td><td><kbd>F2</kbd></td></tr>
+            <tr><td>Autocomplete manual</td><td><kbd>Ctrl</kbd> + <kbd>Space</kbd></td></tr>
+          </tbody>
+        </table>
+
+        <h3>Execução</h3>
+        <table class="shortcuts">
+          <thead>
+            <tr>
+              <th>Ação</th>
+              <th>Atalho</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Executar arquivo Go</td><td><kbd>F5</kbd></td></tr>
+          </tbody>
+        </table>
+
+        <h3>Autocomplete</h3>
+        <table class="shortcuts">
+          <thead>
+            <tr>
+              <th>Ação</th>
+              <th>Atalho</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Navegar na lista</td><td><kbd>↑</kbd> / <kbd>↓</kbd></td></tr>
+            <tr><td>Aceitar sugestão</td><td><kbd>Enter</kbd> / <kbd>Tab</kbd></td></tr>
+            <tr><td>Fechar lista</td><td><kbd>Esc</kbd></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section" id="changelog">
+        <h2>Changelog</h2>
+        <p class="lead">Histórico das principais funcionalidades implementadas.</p>
+
+        <div class="changelog">
+          <article class="changelog-entry">
+            <h3>Ícones nos menus</h3>
+            <p>Ícones do tema Fyne em todos os itens dos menus Arquivo, Exibir, Terminal, Executar e Navegação.</p>
+          </article>
+
+          <article class="changelog-entry">
+            <h3>Correção de popups LSP</h3>
+            <p>Markdown convertido para texto simples; popups posicionados abaixo da linha; snippets expandidos ao aceitar autocomplete.</p>
+            <ul>
+              <li><code>lsp_util.go</code> — sanitização de conteúdo LSP</li>
+              <li><code>lsp_popup.go</code> — popup com <code>widget.Label</code> e quebra de linha</li>
+            </ul>
+          </article>
+
+          <article class="changelog-entry">
+            <h3>Recursos LSP do gopls</h3>
+            <p>Definição, referências, rename, hover, signature help e diagnósticos em tempo real.</p>
+            <ul>
+              <li><code>gopls_client.go</code>, <code>lsp_util.go</code>, <code>lsp_popup.go</code></li>
+              <li>Menu Navegação com F12, Shift+F12, F2</li>
+            </ul>
+          </article>
+
+          <article class="changelog-entry">
+            <h3>Persistência de estado</h3>
+            <p>Reabre última pasta, menu de pastas recentes e save ao fechar.</p>
+            <ul>
+              <li><code>config.go</code> — estado em <code>~/.config/go-ide/state.json</code></li>
+            </ul>
+          </article>
+
+          <article class="changelog-entry">
+            <h3>Atalhos de desfazer e fechar</h3>
+            <p>Ctrl+Z via <code>TypedShortcut</code>; Ctrl+W repassado quando o editor está em foco.</p>
+          </article>
+
+          <article class="changelog-entry">
+            <h3>Cursor do editor</h3>
+            <p>Caret vertical piscante, clique para posicionar e alinhamento via API do TextGrid.</p>
+          </article>
+
+          <article class="changelog-entry">
+            <h3>Autocomplete com gopls</h3>
+            <p>Lista inline sem overlay de canvas; filtro local; renderer customizado.</p>
+            <ul>
+              <li><code>gopls.go</code>, <code>completion_popup.go</code>, <code>lsp_position.go</code></li>
+            </ul>
+          </article>
+
+          <article class="changelog-entry">
+            <h3>Realce de sintaxe Go</h3>
+            <p>Parser de tokens com detecção de funções, tipos, packages e keywords.</p>
+            <ul>
+              <li><code>highlight.go</code></li>
+            </ul>
+          </article>
+
+          <article class="changelog-entry">
+            <h3>Correção da execução no terminal</h3>
+            <p><code>go run</code> via <code>exec.Command</code>; terminal aguarda shell pronto antes de executar.</p>
+          </article>
+
+          <article class="changelog-entry">
+            <h3>Tema Rainbow Brackets</h3>
+            <p>Tema escuro One Dark Pro, editor TextGrid, formatação, execução e propriedades GOROOT.</p>
+            <ul>
+              <li><code>theme.go</code>, <code>brackets.go</code>, <code>code_editor.go</code>, <code>format.go</code>, <code>run.go</code>, <code>settings.go</code></li>
+            </ul>
+          </article>
+        </div>
+
+        <h3>Como testar</h3>
+        <div class="code-block">
+          <pre><code>go test ./...
+go build -o go-ide .
+./go-ide</code></pre>
+        </div>
+        <ol class="tips">
+          <li>Abra um arquivo <code>.go</code> e verifique realce de sintaxe e rainbow brackets.</li>
+          <li>Use <strong>Arquivo → Formatar documento</strong> (Shift+Alt+F).</li>
+          <li>Pressione <strong>F5</strong> para executar — o terminal abre e exibe só a saída.</li>
+          <li>Abra uma pasta com código Go e teste autocomplete (<code>fmt.</code>).</li>
+          <li><strong>F12</strong> ou Ctrl+clique para ir à definição; <strong>Shift+F12</strong> para referências.</li>
+          <li>Introduza um erro — sublinhado com mensagem ao passar o mouse.</li>
+          <li><strong>F2</strong> para renomear; feche e reabra — a última pasta deve voltar.</li>
+        </ol>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>
+        MIT ·
+        <a href="https://github.com/bapadua/go-ide">github.com/bapadua/go-ide</a>
+      </p>
+      <p class="req">Go 1.26+ · Fyne v2 · gopls · LSP</p>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>
