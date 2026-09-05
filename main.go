@@ -10,12 +10,12 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/widget"
 )
 
 type editor struct {
+	app         fyne.App
 	window      fyne.Window
-	entry       *widget.Entry
+	entry       *codeEditor
 	explorer    *packageExplorer
 	terminal    *termPanel
 	editorSplit *container.Split
@@ -24,15 +24,18 @@ type editor struct {
 	modified     bool
 	termPanelOpen bool
 	termOffset    float64
+	lastTermCount int
 }
 
 func main() {
 	a := app.NewWithID("github.com/bapadua/go-ide")
+	a.Settings().SetTheme(newRainbowTheme())
 	w := a.NewWindow("Editor de Texto")
 
 	ed := &editor{
+		app:    a,
 		window: w,
-		entry:  widget.NewMultiLineEntry(),
+		entry:  newCodeEditor(),
 	}
 	ed.explorer = newPackageExplorer(ed.openFileFromExplorer)
 	ed.terminal = newTermPanel(w, "", ed.onTerminalTabsChanged)
@@ -46,11 +49,11 @@ func main() {
 	ed.setupShortcuts()
 
 	ed.termOffset = 0.72
+	ed.terminal.panel.Hide()
 	ed.editorSplit = container.NewVSplit(
 		ed.entry,
 		ed.terminal.panel,
 	)
-	ed.editorSplit.SetOffset(1.0)
 
 	split := container.NewHSplit(
 		ed.explorer.panel,
@@ -71,9 +74,19 @@ func (ed *editor) buildMenu() {
 	openItem := fyne.NewMenuItem("Abrir...", ed.openFile)
 	openFolderItem := fyne.NewMenuItem("Abrir pasta...", ed.openFolder)
 	saveItem := fyne.NewMenuItem("Salvar", ed.saveFile)
+	saveItem.Shortcut = &desktop.CustomShortcut{
+		KeyName:  fyne.KeyS,
+		Modifier: fyne.KeyModifierControl,
+	}
 	saveAsItem := fyne.NewMenuItem("Salvar como...", ed.saveFileAs)
+	formatItem := fyne.NewMenuItem("Formatar documento", ed.formatDocument)
+	formatItem.Shortcut = &desktop.CustomShortcut{
+		KeyName:  fyne.KeyF,
+		Modifier: fyne.KeyModifierShift | fyne.KeyModifierAlt,
+	}
+	propertiesItem := fyne.NewMenuItem("Propriedades...", ed.showProperties)
 
-	fileMenu := fyne.NewMenu("Arquivo", newItem, openItem, openFolderItem, saveItem, saveAsItem)
+	fileMenu := fyne.NewMenu("Arquivo", newItem, openItem, openFolderItem, saveItem, saveAsItem, formatItem, propertiesItem)
 	quitItem := fyne.NewMenuItem("Sair", ed.confirmClose)
 	fileMenu.Items = append(fileMenu.Items, quitItem)
 
@@ -91,37 +104,56 @@ func (ed *editor) buildMenu() {
 	}
 	termMenu := fyne.NewMenu("Terminal", newTermTabItem)
 
-	ed.window.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu, termMenu))
+	runFileItem := fyne.NewMenuItem("Executar arquivo", ed.runCurrentFile)
+	runFileItem.Shortcut = &desktop.CustomShortcut{KeyName: fyne.KeyF5}
+	runMenu := fyne.NewMenu("Executar", runFileItem)
+
+	ed.window.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu, termMenu, runMenu))
 }
 
 func (ed *editor) setupShortcuts() {
+	ed.window.Canvas().AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyS,
+		Modifier: fyne.KeyModifierControl,
+	}, func(_ fyne.Shortcut) {
+		ed.saveFile()
+	})
+	ed.window.Canvas().AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyF,
+		Modifier: fyne.KeyModifierShift | fyne.KeyModifierAlt,
+	}, func(_ fyne.Shortcut) {
+		ed.formatDocument()
+	})
 	ed.window.Canvas().AddShortcut(&desktop.CustomShortcut{
 		KeyName:  fyne.KeyBackTick,
 		Modifier: fyne.KeyModifierControl,
 	}, func(_ fyne.Shortcut) {
 		ed.toggleTerminal()
 	})
+	ed.window.Canvas().AddShortcut(&desktop.CustomShortcut{
+		KeyName: fyne.KeyF5,
+	}, func(_ fyne.Shortcut) {
+		ed.runCurrentFile()
+	})
 }
 
 func (ed *editor) onTerminalTabsChanged(count int) {
 	if count == 0 {
-		ed.editorSplit.SetOffset(1.0)
 		ed.termPanelOpen = false
-		return
+	} else if ed.lastTermCount == 0 {
+		ed.termPanelOpen = true
 	}
-	ed.termPanelOpen = true
+	ed.lastTermCount = count
 	ed.syncTerminalPanel()
 }
 
 func (ed *editor) syncTerminalPanel() {
-	if ed.terminal.tabCount() == 0 {
-		ed.editorSplit.SetOffset(1.0)
+	if ed.terminal.tabCount() == 0 || !ed.termPanelOpen {
+		ed.terminal.panel.Hide()
+		ed.editorSplit.Refresh()
 		return
 	}
-	if !ed.termPanelOpen {
-		ed.editorSplit.SetOffset(1.0)
-		return
-	}
+	ed.terminal.panel.Show()
 	offset := ed.termOffset
 	if offset >= 0.99 {
 		offset = 0.72
@@ -258,7 +290,7 @@ func (ed *editor) writeToFile(path string) {
 }
 
 func (ed *editor) writeTo(_ string, w io.Writer) error {
-	_, err := io.WriteString(w, ed.entry.Text)
+	_, err := io.WriteString(w, ed.entry.Text())
 	return err
 }
 

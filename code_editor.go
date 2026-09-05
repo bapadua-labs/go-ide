@@ -1,0 +1,392 @@
+package main
+
+import (
+	"strings"
+	"unicode/utf8"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
+)
+
+type codeEditor struct {
+	widget.BaseWidget
+
+	grid           *widget.TextGrid
+	scroll         *container.Scroll
+	text           string
+	cursorRow      int
+	cursorCol      int
+	placeholder    string
+	hasFocus       bool
+	ctrlDown       bool
+	pendingRefresh bool
+	OnChanged      func(string)
+}
+
+func newCodeEditor() *codeEditor {
+	ed := &codeEditor{
+		grid: widget.NewTextGrid(),
+	}
+	ed.grid.ShowLineNumbers = true
+	ed.ExtendBaseWidget(ed)
+	return ed
+}
+
+func (ed *codeEditor) CreateRenderer() fyne.WidgetRenderer {
+	ed.scroll = container.NewScroll(ed.grid)
+	if ed.pendingRefresh || ed.placeholder != "" || ed.text != "" {
+		ed.pendingRefresh = false
+		ed.doRefreshGrid(ed.MinSize())
+	}
+	return widget.NewSimpleRenderer(ed.scroll)
+}
+
+func (ed *codeEditor) MinSize() fyne.Size {
+	return fyne.NewSize(200, 120)
+}
+
+func (ed *codeEditor) FocusGained() {
+	ed.hasFocus = true
+	ed.refreshGrid()
+}
+
+func (ed *codeEditor) FocusLost() {
+	ed.hasFocus = false
+	ed.refreshGrid()
+}
+
+func (ed *codeEditor) KeyDown(key *fyne.KeyEvent) {
+	switch key.Name {
+	case desktop.KeyControlLeft, desktop.KeyControlRight:
+		ed.ctrlDown = true
+	}
+}
+
+func (ed *codeEditor) KeyUp(key *fyne.KeyEvent) {
+	switch key.Name {
+	case desktop.KeyControlLeft, desktop.KeyControlRight:
+		ed.ctrlDown = false
+	}
+}
+
+func (ed *codeEditor) TypedRune(r rune) {
+	ed.insertString(string(r))
+}
+
+func (ed *codeEditor) TypedKey(ev *fyne.KeyEvent) {
+	if ed.ctrlDown {
+		switch ev.Name {
+		case fyne.KeyV:
+			ed.paste()
+			return
+		case fyne.KeyC:
+			ed.copy()
+			return
+		case fyne.KeyX:
+			ed.cut()
+			return
+		case fyne.KeyA:
+			ed.selectAll()
+			return
+		}
+	}
+
+	switch ev.Name {
+	case fyne.KeyBackspace:
+		ed.deleteBefore()
+	case fyne.KeyDelete:
+		ed.deleteAfter()
+	case fyne.KeyReturn, fyne.KeyEnter:
+		ed.insertString("\n")
+	case fyne.KeyTab:
+		ed.insertString("\t")
+	case fyne.KeyLeft:
+		ed.moveLeft()
+	case fyne.KeyRight:
+		ed.moveRight()
+	case fyne.KeyUp:
+		ed.moveUp()
+	case fyne.KeyDown:
+		ed.moveDown()
+	case fyne.KeyHome:
+		ed.cursorCol = 0
+		ed.refreshGrid()
+	case fyne.KeyEnd:
+		ed.cursorCol = ed.lineLen(ed.cursorRow)
+		ed.refreshGrid()
+	}
+}
+
+func (ed *codeEditor) Text() string {
+	return ed.text
+}
+
+func (ed *codeEditor) SetText(text string) {
+	ed.text = text
+	ed.cursorRow = 0
+	ed.cursorCol = 0
+	ed.refreshGrid()
+}
+
+func (ed *codeEditor) SetPlaceHolder(placeholder string) {
+	ed.placeholder = placeholder
+	ed.pendingRefresh = true
+}
+
+func (ed *codeEditor) lines() []string {
+	if ed.text == "" {
+		return []string{""}
+	}
+	return strings.Split(ed.text, "\n")
+}
+
+func (ed *codeEditor) lineLen(row int) int {
+	lines := ed.lines()
+	if row < 0 || row >= len(lines) {
+		return 0
+	}
+	return len(lines[row])
+}
+
+func (ed *codeEditor) clampCursor() {
+	lines := ed.lines()
+	if ed.cursorRow < 0 {
+		ed.cursorRow = 0
+	}
+	if ed.cursorRow >= len(lines) {
+		ed.cursorRow = len(lines) - 1
+	}
+	if ed.cursorCol < 0 {
+		ed.cursorCol = 0
+	}
+	if ed.cursorCol > len(lines[ed.cursorRow]) {
+		ed.cursorCol = len(lines[ed.cursorRow])
+	}
+}
+
+func (ed *codeEditor) cursorByteOffset() int {
+	lines := ed.lines()
+	offset := 0
+	for i := 0; i < ed.cursorRow; i++ {
+		offset += len(lines[i]) + 1
+	}
+	return offset + ed.cursorCol
+}
+
+func (ed *codeEditor) setCursorFromOffset(offset int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(ed.text) {
+		offset = len(ed.text)
+	}
+	row := 0
+	remaining := offset
+	for i, line := range ed.lines() {
+		lineLen := len(line)
+		if remaining <= lineLen {
+			ed.cursorRow = i
+			ed.cursorCol = remaining
+			return
+		}
+		remaining -= lineLen + 1
+		row++
+	}
+	ed.cursorRow = row
+	ed.cursorCol = ed.lineLen(ed.cursorRow)
+}
+
+func (ed *codeEditor) notifyChanged() {
+	if ed.OnChanged != nil {
+		ed.OnChanged(ed.text)
+	}
+}
+
+func (ed *codeEditor) insertString(s string) {
+	if s == "" {
+		return
+	}
+	offset := ed.cursorByteOffset()
+	ed.text = ed.text[:offset] + s + ed.text[offset:]
+	ed.setCursorFromOffset(offset + len(s))
+	ed.refreshGrid()
+	ed.notifyChanged()
+}
+
+func (ed *codeEditor) deleteBefore() {
+	offset := ed.cursorByteOffset()
+	if offset == 0 {
+		return
+	}
+	_, size := utf8.DecodeLastRuneInString(ed.text[:offset])
+	ed.text = ed.text[:offset-size] + ed.text[offset:]
+	ed.setCursorFromOffset(offset - size)
+	ed.refreshGrid()
+	ed.notifyChanged()
+}
+
+func (ed *codeEditor) deleteAfter() {
+	offset := ed.cursorByteOffset()
+	if offset >= len(ed.text) {
+		return
+	}
+	_, size := utf8.DecodeRuneInString(ed.text[offset:])
+	ed.text = ed.text[:offset] + ed.text[offset+size:]
+	ed.refreshGrid()
+	ed.notifyChanged()
+}
+
+func (ed *codeEditor) moveLeft() {
+	if ed.cursorCol > 0 {
+		ed.cursorCol--
+	} else if ed.cursorRow > 0 {
+		ed.cursorRow--
+		ed.cursorCol = ed.lineLen(ed.cursorRow)
+	}
+	ed.refreshGrid()
+}
+
+func (ed *codeEditor) moveRight() {
+	if ed.cursorCol < ed.lineLen(ed.cursorRow) {
+		ed.cursorCol++
+	} else if ed.cursorRow < len(ed.lines())-1 {
+		ed.cursorRow++
+		ed.cursorCol = 0
+	}
+	ed.refreshGrid()
+}
+
+func (ed *codeEditor) moveUp() {
+	if ed.cursorRow > 0 {
+		ed.cursorRow--
+		ed.clampCursor()
+		ed.refreshGrid()
+	}
+}
+
+func (ed *codeEditor) moveDown() {
+	if ed.cursorRow < len(ed.lines())-1 {
+		ed.cursorRow++
+		ed.clampCursor()
+		ed.refreshGrid()
+	}
+}
+
+func (ed *codeEditor) paste() {
+	content := fyne.CurrentApp().Clipboard().Content()
+	if content != "" {
+		ed.insertString(content)
+	}
+}
+
+func (ed *codeEditor) copy() {
+	start, end := ed.selectionOffsets()
+	if start == end {
+		return
+	}
+	fyne.CurrentApp().Clipboard().SetContent(ed.text[start:end])
+}
+
+func (ed *codeEditor) cut() {
+	start, end := ed.selectionOffsets()
+	if start == end {
+		return
+	}
+	fyne.CurrentApp().Clipboard().SetContent(ed.text[start:end])
+	ed.text = ed.text[:start] + ed.text[end:]
+	ed.setCursorFromOffset(start)
+	ed.refreshGrid()
+	ed.notifyChanged()
+}
+
+func (ed *codeEditor) selectAll() {
+	ed.cursorRow = len(ed.lines()) - 1
+	ed.cursorCol = ed.lineLen(ed.cursorRow)
+	ed.refreshGrid()
+}
+
+func (ed *codeEditor) selectionOffsets() (int, int) {
+	return 0, len(ed.text)
+}
+
+func (ed *codeEditor) refreshGrid() {
+	if ed.scroll == nil {
+		ed.pendingRefresh = true
+		ed.Refresh()
+		return
+	}
+	size := ed.scroll.Size()
+	if size.Width == 0 || size.Height == 0 {
+		size = ed.MinSize()
+	}
+	ed.doRefreshGrid(size)
+}
+
+func (ed *codeEditor) doRefreshGrid(size fyne.Size) {
+	display := ed.text
+	isPlaceholder := false
+	if display == "" && ed.placeholder != "" && !ed.hasFocus {
+		display = ed.placeholder
+		isPlaceholder = true
+	}
+
+	th := fyne.CurrentApp().Settings().Theme()
+	fg := th.Color(theme.ColorNameForeground, theme.VariantDark)
+	placeholderFG := th.Color(theme.ColorNamePlaceHolder, theme.VariantDark)
+	cursorBG := th.Color(theme.ColorNameSelection, theme.VariantDark)
+
+	bracketIdx := bracketColors(display)
+	lines := strings.Split(display, "\n")
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+
+	rows := make([]widget.TextGridRow, len(lines))
+	bytePos := 0
+	for row, line := range lines {
+		cells := make([]widget.TextGridCell, 0, len(line)+1)
+		for col := 0; col < len(line); {
+			r, size := utf8.DecodeRuneInString(line[col:])
+			style := &widget.CustomTextGridStyle{FGColor: fg}
+			if isPlaceholder {
+				style.FGColor = placeholderFG
+			} else if c := bracketColorAt(display, bracketIdx, bytePos); c != nil {
+				style.FGColor = c
+			}
+			if ed.hasFocus && !isPlaceholder && row == ed.cursorRow && col == ed.cursorCol {
+				style.BGColor = cursorBG
+			}
+			cells = append(cells, widget.TextGridCell{Rune: r, Style: style})
+			col += size
+			bytePos += size
+		}
+		if ed.hasFocus && !isPlaceholder && row == ed.cursorRow && ed.cursorCol == len(line) {
+			cells = append(cells, widget.TextGridCell{
+				Rune:  ' ',
+				Style: &widget.CustomTextGridStyle{FGColor: fg, BGColor: cursorBG},
+			})
+		}
+		rows[row] = widget.TextGridRow{Cells: cells}
+		bytePos++ // newline
+	}
+
+	ed.grid.Rows = rows
+
+	width := size.Width
+	if width < 200 {
+		width = 200
+	}
+	ed.grid.Resize(fyne.NewSize(width, size.Height))
+	ed.grid.Refresh()
+}
+
+var _ desktop.Keyable = (*codeEditor)(nil)
+
+func (ed *codeEditor) Tapped(_ *fyne.PointEvent) {
+	if c := fyne.CurrentApp().Driver().CanvasForObject(ed); c != nil {
+		c.Focus(ed)
+	}
+}

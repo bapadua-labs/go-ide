@@ -1,8 +1,13 @@
 package main
 
 import (
+	"encoding/base64"
+	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/fyne-io/terminal"
 	"fyne.io/fyne/v2"
@@ -131,6 +136,73 @@ func (tp *termPanel) terminalFromTab(tab *container.TabItem) *terminal.Terminal 
 	}
 	term, _ := tab.Content.(*terminal.Terminal)
 	return term
+}
+
+func (tp *termPanel) runCommand(command string) {
+	tp.whenReady(func(t *terminal.Terminal) {
+		if !strings.HasSuffix(command, "\n") {
+			command += "\n"
+		}
+		_, _ = t.Write([]byte(command))
+	})
+}
+
+func (tp *termPanel) runGoFile(goBin, dir, file string) {
+	tp.whenReady(func(t *terminal.Terminal) {
+		go func() {
+			cmd := exec.Command(goBin, "run", file)
+			cmd.Dir = dir
+			out, err := cmd.CombinedOutput()
+			text := string(out)
+			if err != nil && text == "" {
+				text = err.Error() + "\n"
+			}
+			tp.displayOutput(t, text)
+		}()
+	})
+}
+
+func (tp *termPanel) whenReady(fn func(*terminal.Terminal)) {
+	if tp.tabCount() == 0 {
+		tp.newTab()
+	}
+	t := tp.activeTerminal()
+	if t == nil {
+		return
+	}
+	go func() {
+		for range 200 {
+			if _, err := t.Write([]byte("")); err == nil {
+				fyne.Do(func() { fn(t) })
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+}
+
+func (tp *termPanel) displayOutput(t *terminal.Terminal, output string) {
+	encoded := base64.StdEncoding.EncodeToString([]byte(output))
+	delim := fmt.Sprintf("GOIDE_%d", time.Now().UnixNano())
+
+	var script string
+	if runtime.GOOS == "windows" {
+		escaped := strings.ReplaceAll(output, "'", "''")
+		script = fmt.Sprintf("Clear-Host; Write-Output '%s'\n", escaped)
+	} else {
+		script = "stty -echo 2>/dev/null\n"
+		script += "clear\n"
+		script += fmt.Sprintf("base64 -d <<'%s'\n%s\n%s\n", delim, encoded, delim)
+		script += "stty echo 2>/dev/null\n"
+	}
+
+	payload := []byte(script)
+	for range 20 {
+		if _, err := t.Write(payload); err == nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 func shellQuote(s string) string {
