@@ -320,17 +320,19 @@ go build -o go-ide .
           <div>
             <h3>Execução (F5)</h3>
             <ul>
-              <li>Abre o terminal automaticamente se estiver fechado</li>
-              <li>Aguarda o shell ficar pronto antes de executar</li>
+              <li>Abre o terminal automaticamente se estiver fechado e foca o painel</li>
+              <li>Aguarda o PTY real (não o <code>discardWriter</code> inicial) antes de executar</li>
+              <li>Resolve <code>go</code> pelo GOROOT configurado ou pelo PATH</li>
               <li>Captura stdout/stderr sem ecoar o comando</li>
               <li>Sem prompts <code>&gt;</code> de heredoc na saída</li>
             </ul>
           </div>
           <div>
-            <h3>Formatação</h3>
+            <h3>Pasta e foco</h3>
             <ul>
+              <li>Ao abrir uma pasta, o shell ativo recebe <code>cd</code> só com o PTY pronto</li>
+              <li>Ctrl+` / menu reabre o painel com foco no terminal (Ctrl+X chega ao shell)</li>
               <li><strong>Shift+Alt+F</strong> — formata com <code>goimports</code></li>
-              <li>Resolve binário via mesmo mecanismo do gopls</li>
               <li>Menu <strong>Arquivo → Formatar documento</strong></li>
             </ul>
           </div>
@@ -411,6 +413,20 @@ go build -o go-ide .
 
         <div class="changelog">
           <article class="changelog-entry">
+            <h3>Terminal: PTY, pasta do projeto e Ctrl+X</h3>
+            <p>
+              <code>whenReady</code> espera o PTY real via <code>SetReadWriter</code>;
+              <code>cd</code> ao mudar a pasta só após o shell pronto; foco no terminal
+              ao reabrir o painel; F5 resolve <code>go</code> com fallback para o PATH.
+            </p>
+            <ul>
+              <li><code>terminal_panel.go</code> — prontidão do PTY, <code>setWorkingDir</code> e foco</li>
+              <li><code>main.go</code> / <code>run.go</code> — foco ao abrir o terminal; <code>resolveGoBinary</code></li>
+              <li><code>settings.go</code> — GOROOT válido ou <code>LookPath("go")</code></li>
+            </ul>
+          </article>
+
+          <article class="changelog-entry">
             <h3>Seleção de texto no editor</h3>
             <p>Seleção por mouse e teclado; copy/cut/delete/paste operam no intervalo; highlight com a cor de seleção do tema.</p>
             <ul>
@@ -478,7 +494,7 @@ go build -o go-ide .
 
           <article class="changelog-entry">
             <h3>Correção da execução no terminal</h3>
-            <p><code>go run</code> via <code>exec.Command</code>; terminal aguarda shell pronto antes de executar.</p>
+            <p><code>go run</code> via <code>exec.Command</code>; terminal aguarda shell pronto antes de executar. (Critério de prontidão corrigido depois — ver entrada PTY/Ctrl+X.)</p>
           </article>
 
           <article class="changelog-entry">
