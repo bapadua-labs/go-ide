@@ -1,5 +1,29 @@
 # Changelog
 
+## Seleção de texto no editor
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `code_editor.go` | Estado de seleção (âncora/cursor), highlight, drag com mouse, Shift+setas, copy/cut/delete/paste sobre o intervalo |
+| `code_editor_test.go` | Testes de offsets, select all, delete, insert sobre seleção e colapso/extensão com setas |
+
+### Problema corrigido
+
+**Seleção inexistente:** copy/cut operavam no documento inteiro (`selectionOffsets` sempre `0..len`), Ctrl+A só movia o cursor, e não havia highlight nem arraste com o mouse.
+
+### Comportamento
+
+- **Selecionar:** arrastar com o mouse, Shift+setas/Home/End, Shift+clique ou Ctrl+A
+- **Apagar:** Backspace/Delete removem o intervalo selecionado
+- **Copiar / Cortar:** Ctrl+C e Ctrl+X atuam só no trecho selecionado
+- **Substituir:** digitar ou colar (Ctrl+V) substitui a seleção
+- **Colapsar:** seta sem Shift fecha a seleção (esquerda → início, direita → fim)
+- Highlight visual com `ColorNameSelection` do tema
+
+---
+
 ## Ícones nos menus
 
 ### Alterações

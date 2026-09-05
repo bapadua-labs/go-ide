@@ -26,25 +26,30 @@ type editorSnapshot struct {
 type codeEditor struct {
 	widget.BaseWidget
 
-	grid           *widget.TextGrid
-	scroll         *container.Scroll
-	text           string
-	cursorRow      int
-	cursorCol      int
-	cursorVisible  bool
-	blinkStop      chan struct{}
-	caret          *canvas.Rectangle
-	placeholder    string
-	hasFocus       bool
-	ctrlDown       bool
-	pendingRefresh bool
-	completion     *completionPopup
-	completionOpen bool
-	completionLayer *fyne.Container
-	rawCompletions []completionSuggestion
-	completionTimer *time.Timer
-	undoStack       []editorSnapshot
-	onAppShortcut   func(fyne.Shortcut)
+	grid             *widget.TextGrid
+	scroll           *container.Scroll
+	text             string
+	cursorRow        int
+	cursorCol        int
+	selAnchorRow     int
+	selAnchorCol     int
+	selActive        bool
+	selecting        bool
+	cursorVisible    bool
+	blinkStop        chan struct{}
+	caret            *canvas.Rectangle
+	placeholder      string
+	hasFocus         bool
+	ctrlDown         bool
+	shiftDown        bool
+	pendingRefresh   bool
+	completion       *completionPopup
+	completionOpen   bool
+	completionLayer  *fyne.Container
+	rawCompletions   []completionSuggestion
+	completionTimer  *time.Timer
+	undoStack        []editorSnapshot
+	onAppShortcut    func(fyne.Shortcut)
 	onGoToDefinition func(row, col int)
 	onFindReferences func(row, col int)
 	onRename         func(row, col int)
@@ -58,8 +63,8 @@ type codeEditor struct {
 	hoverTimer       *time.Timer
 	lastHoverRow     int
 	lastHoverCol     int
-	OnChanged       func(string)
-	OnCompletion    func(row, col int)
+	OnChanged        func(string)
+	OnCompletion     func(row, col int)
 }
 
 func newCodeEditor() *codeEditor {
@@ -123,6 +128,8 @@ func (ed *codeEditor) KeyDown(key *fyne.KeyEvent) {
 	switch key.Name {
 	case desktop.KeyControlLeft, desktop.KeyControlRight:
 		ed.ctrlDown = true
+	case desktop.KeyShiftLeft, desktop.KeyShiftRight:
+		ed.shiftDown = true
 	}
 }
 
@@ -130,7 +137,22 @@ func (ed *codeEditor) KeyUp(key *fyne.KeyEvent) {
 	switch key.Name {
 	case desktop.KeyControlLeft, desktop.KeyControlRight:
 		ed.ctrlDown = false
+	case desktop.KeyShiftLeft, desktop.KeyShiftRight:
+		ed.shiftDown = false
 	}
+}
+
+func (ed *codeEditor) modifierShift() bool {
+	if ed.shiftDown {
+		return true
+	}
+	if fyne.CurrentApp() == nil {
+		return false
+	}
+	if d, ok := fyne.CurrentApp().Driver().(desktop.Driver); ok {
+		return d.CurrentKeyModifiers()&fyne.KeyModifierShift != 0
+	}
+	return false
 }
 
 func (ed *codeEditor) TypedRune(r rune) {
@@ -163,6 +185,8 @@ func (ed *codeEditor) TypedKey(ev *fyne.KeyEvent) {
 		}
 	}
 
+	extend := ed.modifierShift()
+
 	switch ev.Name {
 	case fyne.KeyBackspace:
 		ed.deleteBefore()
@@ -185,36 +209,38 @@ func (ed *codeEditor) TypedKey(ev *fyne.KeyEvent) {
 			ed.hideCompletion()
 			return
 		}
+		if ed.hasSelection() {
+			ed.clearSelection()
+			ed.refreshGrid()
+		}
 	case fyne.KeyLeft, fyne.KeyRight:
 		ed.hideCompletion()
 		switch ev.Name {
 		case fyne.KeyLeft:
-			ed.moveLeft()
+			ed.moveLeft(extend)
 		case fyne.KeyRight:
-			ed.moveRight()
+			ed.moveRight(extend)
 		}
 	case fyne.KeyUp:
-		if ed.completionOpen && ed.completion != nil {
+		if !extend && ed.completionOpen && ed.completion != nil {
 			ed.completion.SelectPrev()
 			ed.completion.Show()
 			return
 		}
-		ed.moveUp()
+		ed.moveUp(extend)
 	case fyne.KeyDown:
-		if ed.completionOpen && ed.completion != nil {
+		if !extend && ed.completionOpen && ed.completion != nil {
 			ed.completion.SelectNext()
 			ed.completion.Show()
 			return
 		}
-		ed.moveDown()
+		ed.moveDown(extend)
 	case fyne.KeyHome:
 		ed.hideCompletion()
-		ed.cursorCol = 0
-		ed.refreshGrid()
+		ed.moveHome(extend)
 	case fyne.KeyEnd:
 		ed.hideCompletion()
-		ed.cursorCol = ed.lineLen(ed.cursorRow)
-		ed.refreshGrid()
+		ed.moveEnd(extend)
 	case fyne.KeyF12:
 		if ed.onGoToDefinition != nil {
 			ed.onGoToDefinition(ed.cursorRow, ed.cursorCol)
@@ -235,6 +261,7 @@ func (ed *codeEditor) SetText(text string) {
 	ed.text = text
 	ed.cursorRow = 0
 	ed.cursorCol = 0
+	ed.clearSelection()
 	ed.rawCompletions = nil
 	ed.hideCompletion()
 	ed.refreshGrid()
@@ -251,6 +278,7 @@ func (ed *codeEditor) CursorCol() int {
 func (ed *codeEditor) SetCursor(row, col int) {
 	ed.cursorRow = row
 	ed.cursorCol = col
+	ed.clearSelection()
 	ed.clampCursor()
 	ed.refreshGrid()
 }
@@ -404,8 +432,18 @@ func (ed *codeEditor) completionPopupRelPos() fyne.Position {
 }
 
 func (ed *codeEditor) setCursorFromPoint(pos fyne.Position) {
+	row, col := ed.rowColFromPoint(pos)
+	ed.cursorRow = row
+	ed.cursorCol = col
+	ed.clampCursor()
+	ed.cursorVisible = true
+	ed.hideCompletion()
+	ed.refreshGrid()
+}
+
+func (ed *codeEditor) rowColFromPoint(pos fyne.Position) (int, int) {
 	if ed.grid == nil {
-		return
+		return 0, 0
 	}
 
 	gridPos := ed.gridPointFromEditorPoint(pos)
@@ -432,13 +470,7 @@ func (ed *codeEditor) setCursorFromPoint(pos fyne.Position) {
 	if textCol > utf8.RuneCountInString(line) {
 		byteCol = len(line)
 	}
-
-	ed.cursorRow = row
-	ed.cursorCol = byteCol
-	ed.clampCursor()
-	ed.cursorVisible = true
-	ed.hideCompletion()
-	ed.refreshGrid()
+	return row, byteCol
 }
 
 func (ed *codeEditor) startCursorBlink() {
@@ -580,6 +612,7 @@ func (ed *codeEditor) applyCompletion(item completionSuggestion) {
 	insert := expandSnippet(item.InsertText)
 	ed.pushUndo()
 	ed.text = ed.text[:from] + insert + ed.text[to:]
+	ed.clearSelection()
 	ed.setCursorFromOffset(from + len(insert))
 	ed.refreshGrid()
 	ed.notifyChanged()
@@ -679,13 +712,105 @@ func (ed *codeEditor) undo() {
 	ed.text = snap.text
 	ed.cursorRow = snap.cursorRow
 	ed.cursorCol = snap.cursorCol
+	ed.clearSelection()
 	ed.hideCompletion()
 	ed.refreshGrid()
 	ed.notifyChanged()
 }
 
+func (ed *codeEditor) hasSelection() bool {
+	if !ed.selActive {
+		return false
+	}
+	start, end := ed.selectionOffsets()
+	return start < end
+}
+
+func (ed *codeEditor) clearSelection() {
+	ed.selActive = false
+	ed.selAnchorRow = ed.cursorRow
+	ed.selAnchorCol = ed.cursorCol
+}
+
+func (ed *codeEditor) ensureSelectionAnchor() {
+	if ed.selActive {
+		return
+	}
+	ed.selAnchorRow = ed.cursorRow
+	ed.selAnchorCol = ed.cursorCol
+	ed.selActive = true
+}
+
+func (ed *codeEditor) syncSelectionAfterMove(extend bool) {
+	if extend {
+		ed.selActive = ed.selAnchorRow != ed.cursorRow || ed.selAnchorCol != ed.cursorCol
+		return
+	}
+	ed.clearSelection()
+}
+
+func (ed *codeEditor) byteOffsetAt(row, col int) int {
+	lines := ed.lines()
+	if row < 0 {
+		row = 0
+	}
+	if row >= len(lines) {
+		row = len(lines) - 1
+	}
+	if col < 0 {
+		col = 0
+	}
+	if col > len(lines[row]) {
+		col = len(lines[row])
+	}
+	offset := 0
+	for i := 0; i < row; i++ {
+		offset += len(lines[i]) + 1
+	}
+	return offset + col
+}
+
+func (ed *codeEditor) selectionOffsets() (int, int) {
+	cur := ed.cursorByteOffset()
+	if !ed.selActive {
+		return cur, cur
+	}
+	anchor := ed.byteOffsetAt(ed.selAnchorRow, ed.selAnchorCol)
+	if anchor > cur {
+		return cur, anchor
+	}
+	return anchor, cur
+}
+
+func (ed *codeEditor) deleteSelection() bool {
+	if !ed.hasSelection() {
+		return false
+	}
+	start, end := ed.selectionOffsets()
+	ed.pushUndo()
+	ed.text = ed.text[:start] + ed.text[end:]
+	ed.clearSelection()
+	ed.setCursorFromOffset(start)
+	ed.refreshGrid()
+	ed.notifyChanged()
+	return true
+}
+
 func (ed *codeEditor) insertString(s string) {
 	if s == "" {
+		return
+	}
+	if ed.hasSelection() {
+		start, end := ed.selectionOffsets()
+		ed.pushUndo()
+		ed.text = ed.text[:start] + s + ed.text[end:]
+		ed.clearSelection()
+		ed.setCursorFromOffset(start + len(s))
+		ed.refreshGrid()
+		ed.notifyChanged()
+		if strings.Contains(s, "(") && ed.onSignatureHelp != nil {
+			ed.onSignatureHelp(ed.cursorRow, ed.cursorCol)
+		}
 		return
 	}
 	ed.pushUndo()
@@ -700,6 +825,9 @@ func (ed *codeEditor) insertString(s string) {
 }
 
 func (ed *codeEditor) deleteBefore() {
+	if ed.deleteSelection() {
+		return
+	}
 	offset := ed.cursorByteOffset()
 	if offset == 0 {
 		return
@@ -713,6 +841,9 @@ func (ed *codeEditor) deleteBefore() {
 }
 
 func (ed *codeEditor) deleteAfter() {
+	if ed.deleteSelection() {
+		return
+	}
 	offset := ed.cursorByteOffset()
 	if offset >= len(ed.text) {
 		return
@@ -724,40 +855,109 @@ func (ed *codeEditor) deleteAfter() {
 	ed.notifyChanged()
 }
 
-func (ed *codeEditor) moveLeft() {
+func (ed *codeEditor) moveLeft(extend bool) {
+	if !extend && ed.hasSelection() {
+		start, _ := ed.selectionOffsets()
+		ed.clearSelection()
+		ed.setCursorFromOffset(start)
+		ed.refreshGrid()
+		return
+	}
+	if extend {
+		ed.ensureSelectionAnchor()
+	}
 	if ed.cursorCol > 0 {
-		ed.cursorCol--
+		_, size := utf8.DecodeLastRuneInString(ed.lines()[ed.cursorRow][:ed.cursorCol])
+		ed.cursorCol -= size
 	} else if ed.cursorRow > 0 {
 		ed.cursorRow--
 		ed.cursorCol = ed.lineLen(ed.cursorRow)
 	}
+	ed.syncSelectionAfterMove(extend)
 	ed.refreshGrid()
 }
 
-func (ed *codeEditor) moveRight() {
-	if ed.cursorCol < ed.lineLen(ed.cursorRow) {
-		ed.cursorCol++
+func (ed *codeEditor) moveRight(extend bool) {
+	if !extend && ed.hasSelection() {
+		_, end := ed.selectionOffsets()
+		ed.clearSelection()
+		ed.setCursorFromOffset(end)
+		ed.refreshGrid()
+		return
+	}
+	if extend {
+		ed.ensureSelectionAnchor()
+	}
+	line := ed.lines()[ed.cursorRow]
+	if ed.cursorCol < len(line) {
+		_, size := utf8.DecodeRuneInString(line[ed.cursorCol:])
+		ed.cursorCol += size
 	} else if ed.cursorRow < len(ed.lines())-1 {
 		ed.cursorRow++
 		ed.cursorCol = 0
 	}
+	ed.syncSelectionAfterMove(extend)
 	ed.refreshGrid()
 }
 
-func (ed *codeEditor) moveUp() {
+func (ed *codeEditor) moveUp(extend bool) {
+	if !extend && ed.hasSelection() {
+		start, _ := ed.selectionOffsets()
+		ed.clearSelection()
+		ed.setCursorFromOffset(start)
+		ed.refreshGrid()
+		return
+	}
+	if extend {
+		ed.ensureSelectionAnchor()
+	}
 	if ed.cursorRow > 0 {
 		ed.cursorRow--
 		ed.clampCursor()
-		ed.refreshGrid()
 	}
+	ed.syncSelectionAfterMove(extend)
+	ed.refreshGrid()
 }
 
-func (ed *codeEditor) moveDown() {
+func (ed *codeEditor) moveDown(extend bool) {
+	if !extend && ed.hasSelection() {
+		_, end := ed.selectionOffsets()
+		ed.clearSelection()
+		ed.setCursorFromOffset(end)
+		ed.refreshGrid()
+		return
+	}
+	if extend {
+		ed.ensureSelectionAnchor()
+	}
 	if ed.cursorRow < len(ed.lines())-1 {
 		ed.cursorRow++
 		ed.clampCursor()
-		ed.refreshGrid()
 	}
+	ed.syncSelectionAfterMove(extend)
+	ed.refreshGrid()
+}
+
+func (ed *codeEditor) moveHome(extend bool) {
+	if extend {
+		ed.ensureSelectionAnchor()
+	} else if ed.hasSelection() {
+		ed.clearSelection()
+	}
+	ed.cursorCol = 0
+	ed.syncSelectionAfterMove(extend)
+	ed.refreshGrid()
+}
+
+func (ed *codeEditor) moveEnd(extend bool) {
+	if extend {
+		ed.ensureSelectionAnchor()
+	} else if ed.hasSelection() {
+		ed.clearSelection()
+	}
+	ed.cursorCol = ed.lineLen(ed.cursorRow)
+	ed.syncSelectionAfterMove(extend)
+	ed.refreshGrid()
 }
 
 func (ed *codeEditor) paste() {
@@ -765,12 +965,7 @@ func (ed *codeEditor) paste() {
 	if content == "" {
 		return
 	}
-	ed.pushUndo()
-	offset := ed.cursorByteOffset()
-	ed.text = ed.text[:offset] + content + ed.text[offset:]
-	ed.setCursorFromOffset(offset + len(content))
-	ed.refreshGrid()
-	ed.notifyChanged()
+	ed.insertString(content)
 }
 
 func (ed *codeEditor) copy() {
@@ -789,19 +984,20 @@ func (ed *codeEditor) cut() {
 	ed.pushUndo()
 	fyne.CurrentApp().Clipboard().SetContent(ed.text[start:end])
 	ed.text = ed.text[:start] + ed.text[end:]
+	ed.clearSelection()
 	ed.setCursorFromOffset(start)
 	ed.refreshGrid()
 	ed.notifyChanged()
 }
 
 func (ed *codeEditor) selectAll() {
-	ed.cursorRow = len(ed.lines()) - 1
+	lines := ed.lines()
+	ed.selAnchorRow = 0
+	ed.selAnchorCol = 0
+	ed.cursorRow = len(lines) - 1
 	ed.cursorCol = ed.lineLen(ed.cursorRow)
+	ed.selActive = ed.cursorRow != 0 || ed.cursorCol != 0 || len(ed.text) > 0
 	ed.refreshGrid()
-}
-
-func (ed *codeEditor) selectionOffsets() (int, int) {
-	return 0, len(ed.text)
 }
 
 func (ed *codeEditor) refreshGrid() {
@@ -834,6 +1030,11 @@ func (ed *codeEditor) doRefreshGrid(size fyne.Size) {
 	th := fyne.CurrentApp().Settings().Theme()
 	fg := th.Color(theme.ColorNameForeground, theme.VariantDark)
 	placeholderFG := th.Color(theme.ColorNamePlaceHolder, theme.VariantDark)
+	selBG := th.Color(theme.ColorNameSelection, theme.VariantDark)
+	selStart, selEnd := 0, 0
+	if !isPlaceholder && ed.hasSelection() {
+		selStart, selEnd = ed.selectionOffsets()
+	}
 
 	bracketIdx := bracketColors(display)
 	syntaxIdx := goSyntaxHighlight(display)
@@ -857,6 +1058,9 @@ func (ed *codeEditor) doRefreshGrid(size fyne.Size) {
 				style.FGColor = c
 			} else if c := syntaxColorAt(display, syntaxIdx, bytePos); c != nil {
 				style.FGColor = c
+			}
+			if selEnd > selStart && bytePos >= selStart && bytePos < selEnd {
+				style.BGColor = selBG
 			}
 			cells = append(cells, widget.TextGridCell{Rune: r, Style: style})
 			col += size
@@ -901,12 +1105,7 @@ func (ed *codeEditor) TypedShortcut(shortcut fyne.Shortcut) {
 		if content == "" {
 			return
 		}
-		ed.pushUndo()
-		offset := ed.cursorByteOffset()
-		ed.text = ed.text[:offset] + content + ed.text[offset:]
-		ed.setCursorFromOffset(offset + len(content))
-		ed.refreshGrid()
-		ed.notifyChanged()
+		ed.insertString(content)
 	case *fyne.ShortcutCopy:
 		ed.copy()
 	case *fyne.ShortcutCut:
@@ -929,67 +1128,97 @@ func (ed *codeEditor) Tapped(ev *fyne.PointEvent) {
 			return
 		}
 	}
+	// MouseDown/MouseMoved já cuidam do clique e do drag; evita limpar a seleção.
+	if ed.selecting || ed.hasSelection() {
+		return
+	}
 	ed.setCursorFromPoint(ev.Position)
+	ed.clearSelection()
 }
 
 func (ed *codeEditor) MouseDown(ev *desktop.MouseEvent) {
 	if ev.Button != desktop.MouseButtonPrimary {
 		return
 	}
+	if c := fyne.CurrentApp().Driver().CanvasForObject(ed); c != nil {
+		c.Focus(ed)
+	}
 	if ev.Modifier&fyne.KeyModifierControl != 0 && ed.onGoToDefinition != nil {
-		gridPos := ed.gridPointFromEditorPoint(ev.Position)
-		row, col := ed.grid.CursorLocationForPosition(gridPos)
-		textCol := col - ed.gutterCols()
-		if textCol < 0 {
-			textCol = 0
-		}
-		lines := ed.lines()
-		if row < 0 || row >= len(lines) {
-			return
-		}
-		line := lines[row]
-		byteCol := 0
-		for i := 0; i < textCol && byteCol < len(line); i++ {
-			_, size := utf8.DecodeRuneInString(line[byteCol:])
-			byteCol += size
-		}
+		row, byteCol := ed.rowColFromPoint(ev.Position)
 		ed.onGoToDefinition(row, byteCol)
 		return
 	}
+
+	row, col := ed.rowColFromPoint(ev.Position)
+	ed.selecting = true
+	ed.cursorVisible = true
+	ed.hideCompletion()
+	ed.hideLSPPopups()
+
+	if ev.Modifier&fyne.KeyModifierShift != 0 {
+		if !ed.selActive {
+			ed.selAnchorRow = ed.cursorRow
+			ed.selAnchorCol = ed.cursorCol
+		}
+		ed.cursorRow = row
+		ed.cursorCol = col
+		ed.clampCursor()
+		ed.selActive = ed.selAnchorRow != ed.cursorRow || ed.selAnchorCol != ed.cursorCol
+	} else {
+		ed.cursorRow = row
+		ed.cursorCol = col
+		ed.clampCursor()
+		ed.selAnchorRow = ed.cursorRow
+		ed.selAnchorCol = ed.cursorCol
+		ed.selActive = false
+	}
+	ed.refreshGrid()
 }
 
-func (ed *codeEditor) MouseUp(*desktop.MouseEvent) {}
+func (ed *codeEditor) MouseUp(ev *desktop.MouseEvent) {
+	if ev.Button == desktop.MouseButtonPrimary {
+		ed.selecting = false
+	}
+}
 
 func (ed *codeEditor) MouseIn(*desktop.MouseEvent) {}
 
 func (ed *codeEditor) MouseMoved(ev *desktop.MouseEvent) {
+	if ed.selecting {
+		row, col := ed.rowColFromPoint(ev.Position)
+		if row != ed.cursorRow || col != ed.cursorCol {
+			ed.cursorRow = row
+			ed.cursorCol = col
+			ed.clampCursor()
+			ed.selActive = ed.selAnchorRow != ed.cursorRow || ed.selAnchorCol != ed.cursorCol
+			ed.cursorVisible = true
+			ed.refreshGrid()
+		}
+		return
+	}
+
 	if ed.onHover == nil || ed.grid == nil {
 		return
 	}
 	gridPos := ed.gridPointFromEditorPoint(ev.Position)
-	row, col := ed.grid.CursorLocationForPosition(gridPos)
+	_, col := ed.grid.CursorLocationForPosition(gridPos)
 	textCol := col - ed.gutterCols()
 	if textCol < 0 {
 		ed.hideLSPPopups()
 		return
 	}
+	byteRow, byteCol := ed.rowColFromPoint(ev.Position)
 	lines := ed.lines()
-	if row < 0 || row >= len(lines) {
+	if byteRow < 0 || byteRow >= len(lines) {
 		ed.hideLSPPopups()
 		return
 	}
-	line := lines[row]
-	byteCol := 0
-	for i := 0; i < textCol && byteCol < len(line); i++ {
-		_, size := utf8.DecodeRuneInString(line[byteCol:])
-		byteCol += size
-	}
-	_, _, word := identifierAt(ed.text, row, byteCol)
+	_, _, word := identifierAt(ed.text, byteRow, byteCol)
 	if word == "" {
 		ed.hideLSPPopups()
 		return
 	}
-	ed.scheduleHover(row, byteCol)
+	ed.scheduleHover(byteRow, byteCol)
 }
 
 func (ed *codeEditor) MouseOut() {
