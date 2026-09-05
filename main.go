@@ -51,6 +51,7 @@ func main() {
 	ed.entry.OnCompletion = func(row, col int) {
 		ed.fetchCompletions(row, col)
 	}
+	ed.entry.onAppShortcut = ed.handleAppShortcut
 
 	ed.buildMenu()
 	ed.setupShortcuts()
@@ -92,8 +93,13 @@ func (ed *editor) buildMenu() {
 		Modifier: fyne.KeyModifierShift | fyne.KeyModifierAlt,
 	}
 	propertiesItem := fyne.NewMenuItem("Propriedades...", ed.showProperties)
+	closeItem := fyne.NewMenuItem("Fechar", ed.confirmClose)
+	closeItem.Shortcut = &desktop.CustomShortcut{
+		KeyName:  fyne.KeyW,
+		Modifier: fyne.KeyModifierControl,
+	}
 
-	fileMenu := fyne.NewMenu("Arquivo", newItem, openItem, openFolderItem, saveItem, saveAsItem, formatItem, propertiesItem)
+	fileMenu := fyne.NewMenu("Arquivo", newItem, openItem, openFolderItem, saveItem, saveAsItem, formatItem, propertiesItem, closeItem)
 	quitItem := fyne.NewMenuItem("Sair", ed.confirmClose)
 	fileMenu.Items = append(fileMenu.Items, quitItem)
 
@@ -142,6 +148,22 @@ func (ed *editor) setupShortcuts() {
 	}, func(_ fyne.Shortcut) {
 		ed.runCurrentFile()
 	})
+	ed.window.Canvas().AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyW,
+		Modifier: fyne.KeyModifierControl,
+	}, func(_ fyne.Shortcut) {
+		ed.confirmClose()
+	})
+}
+
+func (ed *editor) handleAppShortcut(shortcut fyne.Shortcut) {
+	cs, ok := shortcut.(*desktop.CustomShortcut)
+	if !ok {
+		return
+	}
+	if cs.KeyName == fyne.KeyW && cs.Modifier == fyne.KeyModifierControl {
+		ed.confirmClose()
+	}
 }
 
 func (ed *editor) onTerminalTabsChanged(count int) {

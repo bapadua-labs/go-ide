@@ -15,6 +15,13 @@ import (
 )
 
 const caretWidth = 2
+const maxUndoStack = 100
+
+type editorSnapshot struct {
+	text      string
+	cursorRow int
+	cursorCol int
+}
 
 type codeEditor struct {
 	widget.BaseWidget
@@ -36,8 +43,10 @@ type codeEditor struct {
 	completionLayer *fyne.Container
 	rawCompletions []completionSuggestion
 	completionTimer *time.Timer
-	OnChanged      func(string)
-	OnCompletion   func(row, col int)
+	undoStack       []editorSnapshot
+	onAppShortcut   func(fyne.Shortcut)
+	OnChanged       func(string)
+	OnCompletion    func(row, col int)
 }
 
 func newCodeEditor() *codeEditor {
@@ -193,6 +202,7 @@ func (ed *codeEditor) Text() string {
 }
 
 func (ed *codeEditor) SetText(text string) {
+	ed.undoStack = nil
 	ed.text = text
 	ed.cursorRow = 0
 	ed.cursorCol = 0
@@ -459,6 +469,7 @@ func (ed *codeEditor) applyCompletion(item completionSuggestion) {
 	if from > to {
 		from, to = to, from
 	}
+	ed.pushUndo()
 	ed.text = ed.text[:from] + item.InsertText + ed.text[to:]
 	ed.setCursorFromOffset(from + len(item.InsertText))
 	ed.refreshGrid()
@@ -539,10 +550,36 @@ func (ed *codeEditor) notifyChanged() {
 	}
 }
 
+func (ed *codeEditor) pushUndo() {
+	if len(ed.undoStack) >= maxUndoStack {
+		ed.undoStack = ed.undoStack[1:]
+	}
+	ed.undoStack = append(ed.undoStack, editorSnapshot{
+		text:      ed.text,
+		cursorRow: ed.cursorRow,
+		cursorCol: ed.cursorCol,
+	})
+}
+
+func (ed *codeEditor) undo() {
+	if len(ed.undoStack) == 0 {
+		return
+	}
+	snap := ed.undoStack[len(ed.undoStack)-1]
+	ed.undoStack = ed.undoStack[:len(ed.undoStack)-1]
+	ed.text = snap.text
+	ed.cursorRow = snap.cursorRow
+	ed.cursorCol = snap.cursorCol
+	ed.hideCompletion()
+	ed.refreshGrid()
+	ed.notifyChanged()
+}
+
 func (ed *codeEditor) insertString(s string) {
 	if s == "" {
 		return
 	}
+	ed.pushUndo()
 	offset := ed.cursorByteOffset()
 	ed.text = ed.text[:offset] + s + ed.text[offset:]
 	ed.setCursorFromOffset(offset + len(s))
@@ -555,6 +592,7 @@ func (ed *codeEditor) deleteBefore() {
 	if offset == 0 {
 		return
 	}
+	ed.pushUndo()
 	_, size := utf8.DecodeLastRuneInString(ed.text[:offset])
 	ed.text = ed.text[:offset-size] + ed.text[offset:]
 	ed.setCursorFromOffset(offset - size)
@@ -567,6 +605,7 @@ func (ed *codeEditor) deleteAfter() {
 	if offset >= len(ed.text) {
 		return
 	}
+	ed.pushUndo()
 	_, size := utf8.DecodeRuneInString(ed.text[offset:])
 	ed.text = ed.text[:offset] + ed.text[offset+size:]
 	ed.refreshGrid()
@@ -611,9 +650,15 @@ func (ed *codeEditor) moveDown() {
 
 func (ed *codeEditor) paste() {
 	content := fyne.CurrentApp().Clipboard().Content()
-	if content != "" {
-		ed.insertString(content)
+	if content == "" {
+		return
 	}
+	ed.pushUndo()
+	offset := ed.cursorByteOffset()
+	ed.text = ed.text[:offset] + content + ed.text[offset:]
+	ed.setCursorFromOffset(offset + len(content))
+	ed.refreshGrid()
+	ed.notifyChanged()
 }
 
 func (ed *codeEditor) copy() {
@@ -629,6 +674,7 @@ func (ed *codeEditor) cut() {
 	if start == end {
 		return
 	}
+	ed.pushUndo()
 	fyne.CurrentApp().Clipboard().SetContent(ed.text[start:end])
 	ed.text = ed.text[:start] + ed.text[end:]
 	ed.setCursorFromOffset(start)
@@ -718,6 +764,35 @@ func (ed *codeEditor) doRefreshGrid(size fyne.Size) {
 }
 
 var _ desktop.Keyable = (*codeEditor)(nil)
+var _ fyne.Shortcutable = (*codeEditor)(nil)
+
+func (ed *codeEditor) TypedShortcut(shortcut fyne.Shortcut) {
+	switch s := shortcut.(type) {
+	case *fyne.ShortcutUndo:
+		ed.undo()
+	case *fyne.ShortcutPaste:
+		content := s.Clipboard.Content()
+		if content == "" {
+			return
+		}
+		ed.pushUndo()
+		offset := ed.cursorByteOffset()
+		ed.text = ed.text[:offset] + content + ed.text[offset:]
+		ed.setCursorFromOffset(offset + len(content))
+		ed.refreshGrid()
+		ed.notifyChanged()
+	case *fyne.ShortcutCopy:
+		ed.copy()
+	case *fyne.ShortcutCut:
+		ed.cut()
+	case *fyne.ShortcutSelectAll:
+		ed.selectAll()
+	default:
+		if ed.onAppShortcut != nil {
+			ed.onAppShortcut(shortcut)
+		}
+	}
+}
 
 func (ed *codeEditor) Tapped(ev *fyne.PointEvent) {
 	if c := fyne.CurrentApp().Driver().CanvasForObject(ed); c != nil {

@@ -1,5 +1,30 @@
 # Changelog
 
+## Atalhos de desfazer e fechar
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `code_editor.go` | Pilha de undo (até 100 entradas), `TypedShortcut` para atalhos nativos do Fyne e callback `onAppShortcut` para atalhos globais |
+| `code_editor_test.go` | Testes da pilha de undo e do atalho `ShortcutUndo` |
+| `main.go` | Ctrl+W para fechar a IDE, item "Fechar" no menu Arquivo e repasse de atalhos globais quando o editor está em foco |
+
+### Atalhos
+
+| Ação | Comportamento |
+|---|---|
+| **Ctrl+Z** | Desfaz a última edição (digitação, exclusão, colar, recortar, autocomplete) |
+| **Ctrl+W** | Fecha a IDE com confirmação se houver alterações não salvas |
+
+### Problema corrigido
+
+**Ctrl+Z não funcionava:** o Fyne intercepta Ctrl+Z como `ShortcutUndo` e envia para `TypedShortcut`, não para `TypedKey`. O editor não implementava `fyne.Shortcutable`, então o atalho era ignorado. Corrigido implementando `TypedShortcut` com suporte a Undo, Paste, Copy, Cut e SelectAll.
+
+**Ctrl+W com editor em foco:** atalhos globais registrados no canvas não chegavam ao handler quando o editor tinha foco (widget `Shortcutable` consome o evento). Corrigido repassando atalhos não tratados via `onAppShortcut`.
+
+---
+
 ## Cursor do editor
 
 ### Alterações
@@ -204,7 +229,7 @@
 - Renderiza código com `TextGrid` e números de linha
 - Atualiza cores dos brackets em tempo real ao digitar
 - Destaca a posição do cursor com caret vertical piscante
-- Suporta navegação (setas, Home, End), edição (Backspace, Delete, Tab, Enter) e atalhos Ctrl+C/V/X/A
+- Suporta navegação (setas, Home, End), edição (Backspace, Delete, Tab, Enter) e atalhos Ctrl+C/V/X/A/Z
 - Exibe placeholder quando o editor está vazio e sem foco
 
 ### Correção de crash na inicialização
@@ -235,3 +260,5 @@ go build -o go-ide .
 6. Use **Arquivo → Propriedades** para configurar o caminho do Go
 7. Abra uma pasta com código Go e teste o autocomplete: digite `fmt.` — a lista deve aparecer compacta (6 linhas) abaixo do cursor; continue digitando para filtrar; use **Enter** para aceitar ou **Esc** para fechar
 8. Clique em qualquer ponto do código — o cursor deve ir para a posição clicada; verifique o caret piscando alinhado ao texto
+9. Digite no editor e use **Ctrl+Z** para desfazer a última ação
+10. Use **Ctrl+W** (ou **Arquivo → Fechar**) para fechar a IDE
