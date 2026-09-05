@@ -8,7 +8,7 @@ import (
 )
 
 func (ed *editor) runCurrentFile() {
-	if ed.filePath == "" {
+	if !ed.hasActiveEditor() || ed.filePath == "" {
 		dialog.ShowInformation("Executar", "Salve o arquivo antes de executar.", ed.window)
 		return
 	}

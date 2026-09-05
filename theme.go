@@ -84,5 +84,8 @@ func (t *rainbowTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
 }
 
 func (t *rainbowTheme) Size(name fyne.ThemeSizeName) float32 {
+	if name == theme.SizeNameInlineIcon {
+		return 16 // toolbar / árvore no tamanho típico do VS Code
+	}
 	return t.fallback.Size(name)
 }

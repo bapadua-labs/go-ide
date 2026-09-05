@@ -37,6 +37,9 @@ func formatGoSource(src, goroot, srcdir string) (string, error) {
 }
 
 func (ed *editor) formatDocument() {
+	if !ed.hasActiveEditor() {
+		return
+	}
 	if ed.filePath != "" && !strings.HasSuffix(ed.filePath, ".go") {
 		dialog.ShowInformation("Formatar", "Apenas arquivos .go podem ser formatados.", ed.window)
 		return
@@ -58,6 +61,6 @@ func (ed *editor) formatDocument() {
 	}
 
 	ed.entry.SetText(formatted)
-	ed.modified = true
-	ed.updateTitle()
+	ed.setActiveModified(true)
+	ed.syncGoplsDocument()
 }

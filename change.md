@@ -1,5 +1,53 @@
 # Changelog
 
+## v1.0.3 — Abas de arquivo no editor (estilo VS Code)
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `editor_tabs.go` | DocTabs de arquivos: abrir/focar por caminho, dirty `*`, fechar com confirmação |
+| `editor_tabs_test.go` | Título da aba e busca por caminho/item |
+| `main.go` | Layout com DocTabs acima do terminal; Novo/Fechar/Sair e Ctrl+W por aba |
+| `gopls_integration.go` | `navigateTo`/`loadFileAt` abrem ou focam aba; gopls fecha só ao fechar a aba |
+| `format.go` / `run.go` | Usam o buffer da aba ativa |
+
+### Comportamento
+
+- Abrir arquivo (explorador / Abrir / ir para definição) cria aba nova ou foca a existente
+- Indicador de modificado no título da aba (`arquivo.go *`)
+- **Ctrl+W** / menu **Fechar** fecha a aba atual (confirma se dirty)
+- **Sair** / fechar janela encerra o app (confirma se houver abas dirty)
+- **Novo** abre aba sem título; Salvar como atualiza caminho e título
+- Texto, cursor e estado modified preservados ao trocar de aba
+
+---
+
+## v1.0.2 — Novo arquivo/pasta no explorador e abertura sem travar
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `explorer.go` | Toolbar compacta (novo arquivo/pasta); árvore com ícones de tema; criação `.go` só com o nome |
+| `explorer_icons.go` | SVGs outline 16×16 no estilo VS Code/Cursor |
+| `explorer_test.go` | Validação de nomes e `ensureGoFileName` |
+| `theme.go` | Ícones inline menores (16px) |
+| `main.go` | `ensureGopls` na abertura de pasta roda em goroutine para não bloquear a UI |
+
+### Problema corrigido
+
+**Resumo:** ao abrir a IDE, o explorador parecia em loading (cursor ocupado) e não havia ações para criar arquivo/pasta. Os botões grandes do tema também não lembravam a toolbar do VS Code/Cursor.
+
+### Solução
+
+- Ícones pequenos de **novo arquivo** e **nova pasta** no cabeçalho (estilo toolbar do explorador)
+- Ao criar arquivo, digita só o nome → grava como `nome.go`
+- Árvore com ícones de pasta/arquivo em vez de emoji
+- Inicialização do gopls em background ao abrir pasta
+
+---
+
 ## Detecção e correção do GOROOT
 
 ### Alterações

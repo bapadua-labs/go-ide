@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -29,7 +28,7 @@ func (ed *editor) ensureGopls() {
 }
 
 func (ed *editor) syncGoplsDocument() {
-	if ed.filePath == "" || !strings.HasSuffix(ed.filePath, ".go") {
+	if !ed.hasActiveEditor() || ed.filePath == "" || !strings.HasSuffix(ed.filePath, ".go") {
 		return
 	}
 	ed.ensureGopls()
@@ -37,13 +36,14 @@ func (ed *editor) syncGoplsDocument() {
 }
 
 func (ed *editor) fetchCompletions(row, col int) {
-	if ed.filePath == "" || !strings.HasSuffix(ed.filePath, ".go") {
+	if !ed.hasActiveEditor() || ed.filePath == "" || !strings.HasSuffix(ed.filePath, ".go") {
 		return
 	}
 	ed.ensureGopls()
 
 	path := ed.filePath
 	text := ed.entry.Text()
+	entry := ed.entry
 
 	go func() {
 		items, err := ed.gopls.completions(path, text, row, col)
@@ -51,7 +51,7 @@ func (ed *editor) fetchCompletions(row, col int) {
 			return
 		}
 		fyne.Do(func() {
-			if ed.filePath != path {
+			if ed.entry != entry || ed.filePath != path {
 				return
 			}
 			ed.entry.ShowCompletions(items)
@@ -62,17 +62,26 @@ func (ed *editor) fetchCompletions(row, col int) {
 func (ed *editor) restartGopls() {
 	ed.gopls.stop()
 	ed.ensureGopls()
-	ed.syncGoplsDocument()
+	for _, tab := range ed.tabs {
+		if tab == nil || tab.path == "" || !strings.HasSuffix(tab.path, ".go") || tab.entry == nil {
+			continue
+		}
+		_ = ed.gopls.syncDocument(tab.path, tab.entry.Text())
+	}
 }
 
 func (ed *editor) onDiagnostics(path string, diags []fileDiagnostic) {
-	if !samePath(ed.filePath, path) {
+	tab := ed.findTabByPath(path)
+	if tab == nil || tab.entry == nil {
 		return
 	}
-	ed.entry.SetDiagnostics(diags)
+	tab.entry.SetDiagnostics(diags)
 }
 
 func (ed *editor) goToDefinitionAt(row, col int) {
+	if !ed.hasActiveEditor() {
+		return
+	}
 	if !ed.isGoFile() {
 		dialog.ShowInformation("Definição", "Abra um arquivo Go (.go).", ed.window)
 		return
@@ -120,7 +129,7 @@ func (ed *editor) goToDefinitionAt(row, col int) {
 }
 
 func (ed *editor) findReferencesAt(row, col int) {
-	if !ed.isGoFile() {
+	if !ed.hasActiveEditor() || !ed.isGoFile() {
 		return
 	}
 	ed.ensureGopls()
@@ -139,7 +148,7 @@ func (ed *editor) findReferencesAt(row, col int) {
 }
 
 func (ed *editor) renameSymbolAt(row, col int) {
-	if !ed.isGoFile() {
+	if !ed.hasActiveEditor() || !ed.isGoFile() {
 		return
 	}
 	_, _, word := identifierAt(ed.entry.Text(), row, col)
@@ -188,8 +197,9 @@ func (ed *editor) applyRename(row, col int, newName string) {
 
 func (ed *editor) afterWorkspaceEdit(changed []string) {
 	for _, path := range changed {
-		if path == ed.filePath {
-			ed.reloadCurrentFile()
+		path = normalizePath(path)
+		if tab := ed.findTabByPath(path); tab != nil {
+			ed.reloadTab(tab)
 			continue
 		}
 		if ed.rootPath != "" && strings.HasPrefix(path, ed.rootPath+string(os.PathSeparator)) {
@@ -200,21 +210,21 @@ func (ed *editor) afterWorkspaceEdit(changed []string) {
 }
 
 func (ed *editor) reloadCurrentFile() {
-	if ed.filePath == "" {
+	tab := ed.activeFileTab()
+	if tab == nil || tab.path == "" {
 		return
 	}
-	row := ed.entry.CursorRow()
-	col := ed.entry.CursorCol()
-	ed.loadFileAt(ed.filePath, row, col)
+	ed.reloadTab(tab)
 }
 
 func (ed *editor) fetchHover(row, col int) {
-	if !ed.isGoFile() {
+	if !ed.hasActiveEditor() || !ed.isGoFile() {
 		return
 	}
 	ed.ensureGopls()
 	path := ed.filePath
 	text := ed.entry.Text()
+	entry := ed.entry
 	go func() {
 		hover, err := ed.gopls.hover(path, text, row, col)
 		if err != nil || hover == nil {
@@ -225,7 +235,7 @@ func (ed *editor) fetchHover(row, col int) {
 			return
 		}
 		fyne.Do(func() {
-			if ed.filePath != path {
+			if ed.entry != entry || ed.filePath != path {
 				return
 			}
 			if d := ed.entry.diagnosticAt(row, col); d != nil && d.Message != "" {
@@ -238,12 +248,13 @@ func (ed *editor) fetchHover(row, col int) {
 }
 
 func (ed *editor) fetchSignatureHelp(row, col int) {
-	if !ed.isGoFile() {
+	if !ed.hasActiveEditor() || !ed.isGoFile() {
 		return
 	}
 	ed.ensureGopls()
 	path := ed.filePath
 	text := ed.entry.Text()
+	entry := ed.entry
 	go func() {
 		help, err := ed.gopls.signatureHelp(path, text, row, col)
 		if err != nil || help == nil {
@@ -254,7 +265,7 @@ func (ed *editor) fetchSignatureHelp(row, col int) {
 			return
 		}
 		fyne.Do(func() {
-			if ed.filePath != path {
+			if ed.entry != entry || ed.filePath != path {
 				return
 			}
 			ed.entry.ShowSignatureHelp(content)
@@ -267,13 +278,7 @@ func (ed *editor) navigateTo(loc sourceLocation) {
 	if loc.Path == "" {
 		return
 	}
-	if samePath(loc.Path, ed.filePath) {
-		ed.entry.SetCursor(loc.Row, loc.Col)
-		return
-	}
-	ed.withDiscardConfirmation(func() {
-		ed.loadFileAt(loc.Path, loc.Row, loc.Col)
-	})
+	ed.loadFileAt(loc.Path, loc.Row, loc.Col)
 }
 
 func (ed *editor) showReferences(refs []sourceLocation) {
@@ -306,30 +311,14 @@ func (ed *editor) showReferences(refs []sourceLocation) {
 }
 
 func (ed *editor) isGoFile() bool {
-	return ed.filePath != "" && strings.HasSuffix(ed.filePath, ".go")
+	return ed.hasActiveEditor() && ed.filePath != "" && strings.HasSuffix(ed.filePath, ".go")
 }
 
 func (ed *editor) loadFileAt(path string, row, col int) {
 	path = normalizePath(path)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		dialog.ShowError(err, ed.window)
+	tab := ed.openOrFocusFile(path)
+	if tab == nil {
 		return
 	}
-
-	if ed.filePath != "" && strings.HasSuffix(ed.filePath, ".go") {
-		_ = ed.gopls.closeDocument(ed.filePath)
-	}
-
-	ed.entry.SetText(string(data))
-	ed.filePath = path
-	ed.modified = false
-	ed.updateTitle()
-	ed.entry.SetCursor(row, col)
-
-	if ed.rootPath == "" {
-		ed.rootPath = filepath.Dir(path)
-	}
-	ed.ensureGopls()
-	ed.syncGoplsDocument()
+	tab.entry.SetCursor(row, col)
 }

@@ -4,7 +4,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -15,16 +14,18 @@ import (
 )
 
 type editor struct {
-	app         fyne.App
-	window      fyne.Window
-	entry       *codeEditor
-	explorer    *packageExplorer
-	terminal    *termPanel
-	gopls       *goplsClient
-	editorSplit *container.Split
-	filePath    string
-	rootPath    string
-	modified     bool
+	app           fyne.App
+	window        fyne.Window
+	entry         *codeEditor
+	explorer      *packageExplorer
+	terminal      *termPanel
+	gopls         *goplsClient
+	editorSplit   *container.Split
+	fileTabs      *container.DocTabs
+	tabs          []*fileTab
+	filePath      string
+	rootPath      string
+	modified      bool
 	termPanelOpen bool
 	termOffset    float64
 	lastTermCount int
@@ -39,27 +40,12 @@ func main() {
 	ed := &editor{
 		app:    a,
 		window: w,
-		entry:  newCodeEditor(),
 		gopls:  newGoplsClient(),
 		config: loadConfig(),
 	}
-	ed.explorer = newPackageExplorer(ed.openFileFromExplorer)
+	ed.explorer = newPackageExplorer(w, ed.openFileFromExplorer)
 	ed.terminal = newTermPanel(w, "", ed.onTerminalTabsChanged)
-	ed.entry.SetPlaceHolder("Comece a digitar...")
-	ed.entry.OnChanged = func(_ string) {
-		ed.modified = true
-		ed.updateTitle()
-		ed.syncGoplsDocument()
-	}
-	ed.entry.OnCompletion = func(row, col int) {
-		ed.fetchCompletions(row, col)
-	}
-	ed.entry.onAppShortcut = ed.handleAppShortcut
-	ed.entry.onGoToDefinition = ed.goToDefinitionAt
-	ed.entry.onFindReferences = ed.findReferencesAt
-	ed.entry.onRename = ed.renameSymbolAt
-	ed.entry.onHover = ed.fetchHover
-	ed.entry.onSignatureHelp = ed.fetchSignatureHelp
+	ed.initFileTabs()
 	ed.setupGoplsFeatures()
 	ed.ensureGoRoot()
 
@@ -69,7 +55,7 @@ func main() {
 	ed.termOffset = 0.72
 	ed.terminal.panel.Hide()
 	ed.editorSplit = container.NewVSplit(
-		ed.entry,
+		ed.fileTabs,
 		ed.terminal.panel,
 	)
 
@@ -82,8 +68,12 @@ func main() {
 	w.SetPadded(false)
 	w.Resize(fyne.NewSize(1000, 700))
 	w.SetCloseIntercept(func() {
-		ed.confirmClose()
+		ed.confirmQuit()
 	})
+
+	// Estado inicial: uma aba sem título (como um buffer vazio pronto para digitar).
+	ed.newFile()
+
 	if ed.config.LastFolder != "" {
 		ed.openFolderPath(ed.config.LastFolder)
 	}
@@ -106,7 +96,7 @@ func (ed *editor) buildMenu() {
 		Modifier: fyne.KeyModifierShift | fyne.KeyModifierAlt,
 	}
 	propertiesItem := fyne.NewMenuItemWithIcon("Propriedades...", theme.InfoIcon(), ed.showProperties)
-	closeItem := fyne.NewMenuItemWithIcon("Fechar", theme.CancelIcon(), ed.confirmClose)
+	closeItem := fyne.NewMenuItemWithIcon("Fechar", theme.CancelIcon(), ed.closeActiveTab)
 	closeItem.Shortcut = &desktop.CustomShortcut{
 		KeyName:  fyne.KeyW,
 		Modifier: fyne.KeyModifierControl,
@@ -116,7 +106,7 @@ func (ed *editor) buildMenu() {
 	fileItems = append(fileItems, ed.recentFolderMenuItems()...)
 	fileItems = append(fileItems, saveItem, saveAsItem, formatItem, propertiesItem, closeItem)
 	fileMenu := fyne.NewMenu("Arquivo", fileItems...)
-	quitItem := fyne.NewMenuItemWithIcon("Sair", theme.LogoutIcon(), ed.confirmClose)
+	quitItem := fyne.NewMenuItemWithIcon("Sair", theme.LogoutIcon(), ed.confirmQuit)
 	fileMenu.Items = append(fileMenu.Items, quitItem)
 
 	toggleTermItem := fyne.NewMenuItemWithIcon("Terminal", theme.ComputerIcon(), ed.toggleTerminal)
@@ -138,10 +128,16 @@ func (ed *editor) buildMenu() {
 	runMenu := fyne.NewMenu("Executar", runFileItem)
 
 	goDefItem := fyne.NewMenuItemWithIcon("Ir para definição", theme.NavigateNextIcon(), func() {
+		if !ed.hasActiveEditor() {
+			return
+		}
 		ed.goToDefinitionAt(ed.entry.CursorRow(), ed.entry.CursorCol())
 	})
 	goDefItem.Shortcut = &desktop.CustomShortcut{KeyName: fyne.KeyF12}
 	findRefsItem := fyne.NewMenuItemWithIcon("Encontrar referências", theme.SearchIcon(), func() {
+		if !ed.hasActiveEditor() {
+			return
+		}
 		ed.findReferencesAt(ed.entry.CursorRow(), ed.entry.CursorCol())
 	})
 	findRefsItem.Shortcut = &desktop.CustomShortcut{
@@ -149,6 +145,9 @@ func (ed *editor) buildMenu() {
 		Modifier: fyne.KeyModifierShift,
 	}
 	renameItem := fyne.NewMenuItemWithIcon("Renomear símbolo", theme.SearchReplaceIcon(), func() {
+		if !ed.hasActiveEditor() {
+			return
+		}
 		ed.renameSymbolAt(ed.entry.CursorRow(), ed.entry.CursorCol())
 	})
 	renameItem.Shortcut = &desktop.CustomShortcut{KeyName: fyne.KeyF2}
@@ -185,18 +184,27 @@ func (ed *editor) setupShortcuts() {
 		KeyName:  fyne.KeyW,
 		Modifier: fyne.KeyModifierControl,
 	}, func(_ fyne.Shortcut) {
-		ed.confirmClose()
+		ed.closeActiveTab()
 	})
 	ed.window.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyF12}, func(_ fyne.Shortcut) {
+		if !ed.hasActiveEditor() {
+			return
+		}
 		ed.goToDefinitionAt(ed.entry.CursorRow(), ed.entry.CursorCol())
 	})
 	ed.window.Canvas().AddShortcut(&desktop.CustomShortcut{
 		KeyName:  fyne.KeyF12,
 		Modifier: fyne.KeyModifierShift,
 	}, func(_ fyne.Shortcut) {
+		if !ed.hasActiveEditor() {
+			return
+		}
 		ed.findReferencesAt(ed.entry.CursorRow(), ed.entry.CursorCol())
 	})
 	ed.window.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyF2}, func(_ fyne.Shortcut) {
+		if !ed.hasActiveEditor() {
+			return
+		}
 		ed.renameSymbolAt(ed.entry.CursorRow(), ed.entry.CursorCol())
 	})
 }
@@ -207,7 +215,10 @@ func (ed *editor) handleAppShortcut(shortcut fyne.Shortcut) {
 		return
 	}
 	if cs.KeyName == fyne.KeyW && cs.Modifier == fyne.KeyModifierControl {
-		ed.confirmClose()
+		ed.closeActiveTab()
+		return
+	}
+	if !ed.hasActiveEditor() {
 		return
 	}
 	if cs.KeyName == fyne.KeyF12 && cs.Modifier == fyne.KeyModifierShift {
@@ -275,8 +286,13 @@ func (ed *editor) toggleTerminal() {
 
 func (ed *editor) updateTitle() {
 	title := "Editor de Texto"
+	if ed.rootPath != "" && ed.filePath == "" && !ed.modified {
+		title = filepath.Base(ed.rootPath) + " — Editor de Texto"
+	}
 	if ed.filePath != "" {
 		title = filepath.Base(ed.filePath)
+	} else if ed.hasActiveEditor() {
+		title = "Sem título"
 	}
 	if ed.modified {
 		title += " *"
@@ -285,24 +301,19 @@ func (ed *editor) updateTitle() {
 }
 
 func (ed *editor) newFile() {
-	ed.withDiscardConfirmation(func() {
-		ed.entry.SetText("")
-		ed.filePath = ""
-		ed.modified = false
-		ed.updateTitle()
-	})
+	tab := ed.createUntitledTab()
+	ed.fileTabs.Append(tab.item)
+	ed.activateTab(tab)
 }
 
 func (ed *editor) openFile() {
-	ed.withDiscardConfirmation(func() {
-		dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
-			if err != nil || reader == nil {
-				return
-			}
-			defer reader.Close()
-			ed.loadFile(reader.URI().Path())
-		}, ed.window)
-	})
+	dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
+		if err != nil || reader == nil {
+			return
+		}
+		defer reader.Close()
+		ed.loadFile(reader.URI().Path())
+	}, ed.window)
 }
 
 func (ed *editor) recentFolderMenuItems() []*fyne.MenuItem {
@@ -341,8 +352,9 @@ func (ed *editor) openFolderPath(path string) {
 	ed.rootPath = normalizePath(path)
 	ed.explorer.setRoot(ed.rootPath)
 	ed.terminal.setWorkingDir(ed.rootPath)
-	ed.ensureGopls()
-	ed.window.SetTitle(filepath.Base(ed.rootPath) + " — Editor de Texto")
+	// gopls initialize é lento; não bloquear a UI (cursor de ocupado).
+	go ed.ensureGopls()
+	ed.updateTitle()
 
 	ed.config.setLastFolder(ed.rootPath)
 	ed.config.addRecentFolder(ed.rootPath)
@@ -352,37 +364,17 @@ func (ed *editor) openFolderPath(path string) {
 }
 
 func (ed *editor) openFileFromExplorer(path string) {
-	ed.withDiscardConfirmation(func() {
-		ed.loadFile(path)
-	})
+	ed.loadFile(path)
 }
 
 func (ed *editor) loadFile(path string) {
-	path = normalizePath(path)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		dialog.ShowError(err, ed.window)
-		return
-	}
-
-	if ed.filePath != "" && strings.HasSuffix(ed.filePath, ".go") {
-		_ = ed.gopls.closeDocument(ed.filePath)
-	}
-
-	ed.entry.SetText(string(data))
-	ed.filePath = path
-	ed.modified = false
-	ed.entry.SetDiagnostics(nil)
-	ed.updateTitle()
-
-	if ed.rootPath == "" {
-		ed.rootPath = filepath.Dir(path)
-	}
-	ed.ensureGopls()
-	ed.syncGoplsDocument()
+	ed.openOrFocusFile(path)
 }
 
 func (ed *editor) saveFile() {
+	if !ed.hasActiveEditor() {
+		return
+	}
 	if ed.filePath == "" {
 		ed.saveFileAs()
 		return
@@ -391,6 +383,9 @@ func (ed *editor) saveFile() {
 }
 
 func (ed *editor) saveFileAs() {
+	if !ed.hasActiveEditor() {
+		return
+	}
 	dialog.ShowFileSave(func(writer fyne.URIWriteCloser, err error) {
 		if err != nil || writer == nil {
 			return
@@ -403,13 +398,14 @@ func (ed *editor) saveFileAs() {
 			return
 		}
 
-		ed.filePath = path
-		ed.modified = false
-		ed.updateTitle()
+		ed.updateActiveTabPath(path)
 	}, ed.window)
 }
 
 func (ed *editor) writeToFile(path string) {
+	if !ed.hasActiveEditor() {
+		return
+	}
 	f, err := os.Create(path)
 	if err != nil {
 		dialog.ShowError(err, ed.window)
@@ -422,81 +418,35 @@ func (ed *editor) writeToFile(path string) {
 		return
 	}
 
-	ed.modified = false
-	ed.updateTitle()
+	ed.setActiveModified(false)
 }
 
 func (ed *editor) writeTo(_ string, w io.Writer) error {
+	if ed.entry == nil {
+		return nil
+	}
 	_, err := io.WriteString(w, ed.entry.Text())
 	return err
 }
 
-func (ed *editor) withDiscardConfirmation(action func()) {
-	if !ed.modified {
-		action()
+func (ed *editor) confirmQuit() {
+	if !ed.anyDirtyTabs() {
+		ed.saveConfigOnExit()
+		ed.window.Close()
 		return
 	}
 
 	dialog.ShowConfirm(
 		"Alterações não salvas",
-		"Deseja descartar as alterações?",
+		"Há arquivos com alterações não salvas. Deseja sair mesmo assim?",
 		func(ok bool) {
 			if ok {
-				action()
-			}
-		},
-		ed.window,
-	)
-}
-
-func (ed *editor) confirmClose() {
-	if !ed.modified {
-		ed.saveConfigOnExit()
-		ed.window.Close()
-		return
-	}
-
-	dialog.ShowConfirm(
-		"Alterações não salvas",
-		"Deseja salvar antes de sair?",
-		func(save bool) {
-			if !save {
 				ed.saveConfigOnExit()
 				ed.window.Close()
-				return
 			}
-			if ed.filePath != "" {
-				ed.writeToFile(ed.filePath)
-				if !ed.modified {
-					ed.saveConfigOnExit()
-					ed.window.Close()
-				}
-				return
-			}
-			ed.saveFileAsOnClose()
 		},
 		ed.window,
 	)
-}
-
-func (ed *editor) saveFileAsOnClose() {
-	dialog.ShowFileSave(func(writer fyne.URIWriteCloser, err error) {
-		if err != nil || writer == nil {
-			return
-		}
-		defer writer.Close()
-
-		path := writer.URI().Path()
-		if err := ed.writeTo(path, writer); err != nil {
-			dialog.ShowError(err, ed.window)
-			return
-		}
-
-		ed.filePath = path
-		ed.modified = false
-		ed.saveConfigOnExit()
-		ed.window.Close()
-	}, ed.window)
 }
 
 func (ed *editor) saveConfigOnExit() {
