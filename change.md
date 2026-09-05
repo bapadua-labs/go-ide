@@ -1,5 +1,43 @@
 # Changelog
 
+## Persistência de estado da IDE
+
+### Novos arquivos
+
+| Arquivo | Descrição |
+|---|---|
+| `config.go` | Carrega e salva o estado da IDE em JSON (`last_folder`, `recent_folders`) |
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `main.go` | Reabre a última pasta ao iniciar, menu de pastas recentes, `openFolderPath` centralizado e save ao fechar |
+
+### Arquivo de configuração
+
+Salvo em `~/.config/go-ide/state.json`:
+
+```json
+{
+  "last_folder": "/caminho/para/projeto",
+  "recent_folders": [
+    "/caminho/para/projeto",
+    "/outro/projeto"
+  ]
+}
+```
+
+### Comportamento
+
+- **Reabrir na inicialização:** se `last_folder` existir e for válida, a pasta é aberta automaticamente ao iniciar a IDE
+- **Pastas recentes:** ao abrir uma pasta, ela entra na lista (máx. 10), sem duplicatas, com a mais recente primeiro
+- **Menu Arquivo:** após "Abrir pasta...", um separador lista as pastas recentes (rótulo = nome da pasta)
+- **Persistência:** salva ao abrir pasta e ao sair da IDE
+- **Limpeza:** pastas inexistentes são removidas da lista ao carregar a configuração
+
+---
+
 ## Atalhos de desfazer e fechar
 
 ### Alterações
@@ -262,3 +300,5 @@ go build -o go-ide .
 8. Clique em qualquer ponto do código — o cursor deve ir para a posição clicada; verifique o caret piscando alinhado ao texto
 9. Digite no editor e use **Ctrl+Z** para desfazer a última ação
 10. Use **Ctrl+W** (ou **Arquivo → Fechar**) para fechar a IDE
+11. Feche a IDE com uma pasta aberta e reinicie — a última pasta deve reabrir automaticamente
+12. Abra pastas diferentes e verifique em **Arquivo** a lista de pastas recentes abaixo de "Abrir pasta..."

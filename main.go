@@ -27,6 +27,7 @@ type editor struct {
 	termPanelOpen bool
 	termOffset    float64
 	lastTermCount int
+	config        ideConfig
 }
 
 func main() {
@@ -39,6 +40,7 @@ func main() {
 		window: w,
 		entry:  newCodeEditor(),
 		gopls:  newGoplsClient(),
+		config: loadConfig(),
 	}
 	ed.explorer = newPackageExplorer(ed.openFileFromExplorer)
 	ed.terminal = newTermPanel(w, "", ed.onTerminalTabsChanged)
@@ -74,6 +76,9 @@ func main() {
 	w.SetCloseIntercept(func() {
 		ed.confirmClose()
 	})
+	if ed.config.LastFolder != "" {
+		ed.openFolderPath(ed.config.LastFolder)
+	}
 	w.ShowAndRun()
 }
 
@@ -99,7 +104,10 @@ func (ed *editor) buildMenu() {
 		Modifier: fyne.KeyModifierControl,
 	}
 
-	fileMenu := fyne.NewMenu("Arquivo", newItem, openItem, openFolderItem, saveItem, saveAsItem, formatItem, propertiesItem, closeItem)
+	fileItems := []*fyne.MenuItem{newItem, openItem, openFolderItem}
+	fileItems = append(fileItems, ed.recentFolderMenuItems()...)
+	fileItems = append(fileItems, saveItem, saveAsItem, formatItem, propertiesItem, closeItem)
+	fileMenu := fyne.NewMenu("Arquivo", fileItems...)
 	quitItem := fyne.NewMenuItem("Sair", ed.confirmClose)
 	fileMenu.Items = append(fileMenu.Items, quitItem)
 
@@ -243,17 +251,50 @@ func (ed *editor) openFile() {
 	})
 }
 
+func (ed *editor) recentFolderMenuItems() []*fyne.MenuItem {
+	if len(ed.config.RecentFolders) == 0 {
+		return nil
+	}
+	items := []*fyne.MenuItem{fyne.NewMenuItemSeparator()}
+	for _, path := range ed.config.RecentFolders {
+		folderPath := path
+		label := filepath.Base(folderPath)
+		if label == "" || label == "." || label == string(os.PathSeparator) {
+			label = folderPath
+		}
+		item := fyne.NewMenuItem(label, func() {
+			ed.openFolderPath(folderPath)
+		})
+		items = append(items, item)
+	}
+	return items
+}
+
 func (ed *editor) openFolder() {
 	dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
 		if err != nil || uri == nil {
 			return
 		}
-		ed.rootPath = uri.Path()
-		ed.explorer.setRoot(ed.rootPath)
-		ed.terminal.setWorkingDir(ed.rootPath)
-		ed.ensureGopls()
-		ed.window.SetTitle(filepath.Base(ed.rootPath) + " — Editor de Texto")
+		ed.openFolderPath(uri.Path())
 	}, ed.window)
+}
+
+func (ed *editor) openFolderPath(path string) {
+	if !folderExists(path) {
+		dialog.ShowError(os.ErrNotExist, ed.window)
+		return
+	}
+	ed.rootPath = filepath.Clean(path)
+	ed.explorer.setRoot(ed.rootPath)
+	ed.terminal.setWorkingDir(ed.rootPath)
+	ed.ensureGopls()
+	ed.window.SetTitle(filepath.Base(ed.rootPath) + " — Editor de Texto")
+
+	ed.config.setLastFolder(ed.rootPath)
+	ed.config.addRecentFolder(ed.rootPath)
+	_ = ed.config.save()
+
+	ed.buildMenu()
 }
 
 func (ed *editor) openFileFromExplorer(path string) {
@@ -354,6 +395,7 @@ func (ed *editor) withDiscardConfirmation(action func()) {
 
 func (ed *editor) confirmClose() {
 	if !ed.modified {
+		ed.saveConfigOnExit()
 		ed.window.Close()
 		return
 	}
@@ -363,12 +405,14 @@ func (ed *editor) confirmClose() {
 		"Deseja salvar antes de sair?",
 		func(save bool) {
 			if !save {
+				ed.saveConfigOnExit()
 				ed.window.Close()
 				return
 			}
 			if ed.filePath != "" {
 				ed.writeToFile(ed.filePath)
 				if !ed.modified {
+					ed.saveConfigOnExit()
 					ed.window.Close()
 				}
 				return
@@ -394,6 +438,14 @@ func (ed *editor) saveFileAsOnClose() {
 
 		ed.filePath = path
 		ed.modified = false
+		ed.saveConfigOnExit()
 		ed.window.Close()
 	}, ed.window)
+}
+
+func (ed *editor) saveConfigOnExit() {
+	if ed.rootPath != "" {
+		ed.config.setLastFolder(ed.rootPath)
+	}
+	_ = ed.config.save()
 }
