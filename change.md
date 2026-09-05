@@ -9,16 +9,16 @@
 | `gopls.go` | Cliente LSP que inicia o `gopls serve` via stdio e expõe sync de documentos e completions |
 | `gopls_integration.go` | Integração do gopls com o editor (ciclo de vida, sincronização e busca de sugestões) |
 | `lsp_position.go` | Conversão de posições byte ↔ UTF-16 exigida pelo protocolo LSP |
-| `completion_popup.go` | Popup de sugestões inspirado no `CompletionEntry` do fyne-x |
+| `completion_popup.go` | Camada visual de sugestões dentro do editor (sem overlay de canvas) |
 
 ### Alterações
 
 | Arquivo | Descrição |
 |---|---|
-| `code_editor.go` | Dispara completions (Ctrl+Space e digitação), exibe popup e aplica o item selecionado |
+| `code_editor.go` | Renderer customizado (`codeEditorRenderer`), completions inline, filtro por prefixo e aceite com Enter/Tab |
 | `main.go` | Inicia o gopls ao abrir pasta/arquivo `.go` e sincroniza o documento a cada alteração |
 | `settings.go` | Reinicia o gopls ao alterar o GOROOT em Propriedades |
-| `go.mod` | Adiciona `go.lsp.dev/protocol`, `go.lsp.dev/jsonrpc2`, `go.lsp.dev/uri` e `fyne.io/x/fyne` |
+| `go.mod` | Adiciona `go.lsp.dev/protocol`, `go.lsp.dev/jsonrpc2` e `go.lsp.dev/uri` |
 
 ### Cliente LSP (`gopls.go`)
 
@@ -28,11 +28,20 @@
 - Consulta `textDocument/completion` e converte `TextEdit` / `InsertText` em sugestões aplicáveis
 - Resolve o binário `gopls` com `resolveToolBinary()` (mesmo mecanismo do `goimports`)
 
-### Popup de sugestões (`completion_popup.go`)
+### Lista de sugestões (`completion_popup.go`)
 
-- Lista flutuante com `widget.PopUp` + `widget.List`, no padrão do `CompletionEntry` do fyne-x
-- Navegação com ↑/↓, aceitar com Tab/Enter, fechar com Esc
-- Posicionado próximo à linha do cursor no editor
+- Renderizada **dentro do editor** com `container.WithoutLayout`, sem `widget.PopUp`
+- Painel compacto de **6 linhas** com scroll interno; até 50 itens na lista
+- Linhas com `canvas.Text` monoespaçado e texto truncado em 72 caracteres
+- Não rouba foco — é possível continuar digitando com a lista visível (ex.: `Print` → `Println`)
+- Filtro local em tempo real pelo prefixo do identificador sendo digitado
+- Posicionada abaixo da linha do cursor, alinhada à coluna no `TextGrid`
+- Item selecionado destacado com fundo colorido e negrito
+
+### Renderer do editor (`code_editor.go`)
+
+- `codeEditorRenderer` posiciona manualmente o scroll (tela inteira) e o painel de sugestões (tamanho fixo)
+- Evita o `StackLayout` do Fyne, que redimensionava a lista para cobrir todo o editor
 
 ### Atalhos e gatilhos
 
@@ -40,9 +49,18 @@
 |---|---|
 | **Ctrl+Space** | Dispara completion manualmente |
 | Digitar `.` | Abre sugestões após ponto (ex.: `fmt.`) |
-| Digitar identificador | Debounce de 200 ms após letras/números |
-| **Tab** / **Enter** | Aceita o item selecionado no popup |
-| **Esc** | Fecha o popup sem alterar o texto |
+| Digitar identificador | Filtra a lista localmente; reconsulta o gopls com debounce (120–200 ms) |
+| **↑** / **↓** | Navega na lista sem mover o cursor do editor |
+| **Enter** / **Tab** | Aceita o item selecionado |
+| **Esc** | Fecha a lista sem alterar o texto |
+
+### Problemas corrigidos
+
+**Lista bloqueava a digitação:** o `widget.PopUp` adiciona um overlay no canvas do Fyne que desvia o foco do teclado. A lista foi movida para uma camada interna do editor, mantendo o foco no `codeEditor`.
+
+**Posicionamento incorreto:** a lista era ancorada no editor inteiro; agora usa a posição do `TextGrid` (gutter de linhas + coluna do cursor).
+
+**Lista cobria todo o código:** o `StackLayout` redimensionava a camada de sugestões para o tamanho inteiro do editor a cada refresh, exibindo dezenas de itens esticados. Corrigido com `codeEditorRenderer` + `WithoutLayout` e painel de altura fixa com scroll.
 
 ### Requisitos
 
@@ -190,4 +208,4 @@ go build -o go-ide .
 4. Use **Arquivo → Formatar documento** (Shift+Alt+F) em arquivos Go
 5. Use **Executar → Executar arquivo** (F5) para rodar o arquivo atual — o terminal abre automaticamente e exibe apenas a saída
 6. Use **Arquivo → Propriedades** para configurar o caminho do Go
-7. Abra uma pasta com código Go e teste o autocomplete: digite `fmt.` ou use **Ctrl+Space** em um arquivo `.go`
+7. Abra uma pasta com código Go e teste o autocomplete: digite `fmt.` — a lista deve aparecer compacta (6 linhas) abaixo do cursor; continue digitando para filtrar; use **Enter** para aceitar ou **Esc** para fechar

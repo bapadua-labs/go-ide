@@ -39,7 +39,7 @@ func (ed *editor) fetchCompletions(row, col int) {
 			return
 		}
 		fyne.Do(func() {
-			if ed.filePath != path || ed.entry.Text() != text {
+			if ed.filePath != path {
 				return
 			}
 			ed.entry.ShowCompletions(items)
