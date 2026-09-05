@@ -44,6 +44,8 @@ func main() {
 		config: loadConfig(),
 	}
 	ed.explorer = newPackageExplorer(w, ed.openFileFromExplorer)
+	ed.explorer.onPathDeleted = ed.onExplorerPathDeleted
+	ed.explorer.onPathRenamed = ed.onExplorerPathRenamed
 	ed.terminal = newTermPanel(w, "", ed.onTerminalTabsChanged)
 	ed.initFileTabs()
 	ed.setupGoplsFeatures()

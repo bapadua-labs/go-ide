@@ -1,6 +1,28 @@
 # Changelog
 
+## v1.0.4 — Menu de contexto no explorador (renomear e excluir)
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `explorer.go` | Clique direito na árvore: menu Renomear / Excluir; diálogos e `os.Rename` / `os.Remove` |
+| `editor_tabs.go` | Fecha ou atualiza abas afetadas por exclusão/renomeação |
+| `lsp_util.go` | Helpers `pathUnderOrEqual` e `rewritePathPrefix` |
+| `explorer_test.go` | Testes dos helpers de caminho |
+| `main.go` | Liga callbacks do explorador às abas |
+
+### Recursos
+
+- Botão direito em arquivo ou pasta no explorador abre menu de contexto
+- **Renomear** pede o novo nome e atualiza abas abertas (incluindo arquivos dentro de pastas renomeadas)
+- **Excluir** pede confirmação; pastas removem o conteúdo; abas dos caminhos removidos são fechadas
+- Clique direito seleciona o item sem abrir o arquivo
+
+---
+
 ## v1.0.3 — Abas de arquivo no editor (estilo VS Code)
+
 
 ### Alterações
 

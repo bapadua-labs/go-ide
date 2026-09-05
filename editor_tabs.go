@@ -301,15 +301,62 @@ func (ed *editor) updateActiveTabPath(path string) {
 		ed.filePath = path
 		return
 	}
+	tab.modified = false
+	ed.updateTabPath(tab, path)
+}
+
+func (ed *editor) updateTabPath(tab *fileTab, newPath string) {
+	if tab == nil {
+		return
+	}
+	newPath = normalizePath(newPath)
 	old := tab.path
-	if old != "" && strings.HasSuffix(old, ".go") && !samePath(old, path) {
+	if old != "" && strings.HasSuffix(old, ".go") && !samePath(old, newPath) {
 		_ = ed.gopls.closeDocument(old)
 	}
-	tab.path = path
-	tab.modified = false
-	ed.filePath = path
-	ed.modified = false
+	tab.path = newPath
 	ed.refreshTabTitle(tab)
-	ed.updateTitle()
-	ed.syncGoplsDocument()
+	if tab == ed.activeFileTab() {
+		ed.filePath = newPath
+		ed.modified = tab.modified
+		ed.updateTitle()
+		if strings.HasSuffix(newPath, ".go") {
+			ed.syncGoplsDocument()
+		}
+	}
+}
+
+// onExplorerPathDeleted fecha abas cujo caminho foi removido (arquivo ou pasta).
+func (ed *editor) onExplorerPathDeleted(path string) {
+	path = normalizePath(path)
+	if path == "" {
+		return
+	}
+	var toClose []*fileTab
+	for _, t := range ed.tabs {
+		if t != nil && t.path != "" && pathUnderOrEqual(path, t.path) {
+			toClose = append(toClose, t)
+		}
+	}
+	for _, t := range toClose {
+		ed.closeFileTab(t)
+	}
+}
+
+// onExplorerPathRenamed atualiza caminhos de abas afetadas por rename no explorador.
+func (ed *editor) onExplorerPathRenamed(oldPath, newPath string) {
+	oldPath = normalizePath(oldPath)
+	newPath = normalizePath(newPath)
+	if oldPath == "" || newPath == "" {
+		return
+	}
+	for _, t := range ed.tabs {
+		if t == nil || t.path == "" {
+			continue
+		}
+		if !pathUnderOrEqual(oldPath, t.path) {
+			continue
+		}
+		ed.updateTabPath(t, rewritePathPrefix(t.path, oldPath, newPath))
+	}
 }

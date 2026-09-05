@@ -82,6 +82,38 @@ func samePath(a, b string) bool {
 	return normalizePath(a) == normalizePath(b)
 }
 
+// pathUnderOrEqual reporta se child é o próprio parent ou está dentro dele.
+func pathUnderOrEqual(parent, child string) bool {
+	parent = normalizePath(parent)
+	child = normalizePath(child)
+	if parent == "" || child == "" {
+		return false
+	}
+	if samePath(parent, child) {
+		return true
+	}
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+// rewritePathPrefix troca o prefixo oldPrefix por newPrefix em path.
+func rewritePathPrefix(path, oldPrefix, newPrefix string) string {
+	path = normalizePath(path)
+	oldPrefix = normalizePath(oldPrefix)
+	newPrefix = normalizePath(newPrefix)
+	if samePath(path, oldPrefix) {
+		return newPrefix
+	}
+	rel, err := filepath.Rel(oldPrefix, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return path
+	}
+	return filepath.Join(newPrefix, rel)
+}
+
 func snapToIdentifier(text string, row, col int) (int, int, string) {
 	_, _, word := identifierAt(text, row, col)
 	if word != "" {

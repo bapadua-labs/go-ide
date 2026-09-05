@@ -22,35 +22,74 @@ var skipDirs = map[string]bool{
 }
 
 type packageExplorer struct {
-	root     string
-	selected string
-	tree     *widget.Tree
-	panel    fyne.CanvasObject
-	window   fyne.Window
+	root          string
+	selected      string
+	tree          *widget.Tree
+	panel         fyne.CanvasObject
+	window        fyne.Window
+	onFileSelect  func(string)
+	onPathDeleted func(string)
+	onPathRenamed func(oldPath, newPath string)
+	selectingOnly bool
+}
+
+// explorerTreeItem é o conteúdo de um nó da árvore; captura clique direito.
+type explorerTreeItem struct {
+	widget.BaseWidget
+	pe    *packageExplorer
+	uid   string
+	icon  *widget.Icon
+	label *widget.Label
+}
+
+var _ fyne.SecondaryTappable = (*explorerTreeItem)(nil)
+
+func newExplorerTreeItem(pe *packageExplorer) *explorerTreeItem {
+	item := &explorerTreeItem{
+		pe:    pe,
+		icon:  widget.NewIcon(theme.DocumentIcon()),
+		label: widget.NewLabel(""),
+	}
+	item.ExtendBaseWidget(item)
+	return item
+}
+
+func (i *explorerTreeItem) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(container.NewHBox(i.icon, i.label))
+}
+
+func (i *explorerTreeItem) TappedSecondary(ev *fyne.PointEvent) {
+	if i.pe == nil || i.uid == "" {
+		return
+	}
+	i.pe.showContextMenu(i.uid, ev)
 }
 
 func newPackageExplorer(win fyne.Window, onFileSelect func(string)) *packageExplorer {
 	pe := &packageExplorer{
-		window: win,
+		window:       win,
+		onFileSelect: onFileSelect,
 	}
 
 	pe.tree = widget.NewTree(
 		pe.childIDs,
 		pe.isBranch,
 		func(_ bool) fyne.CanvasObject {
-			return container.NewHBox(
-				widget.NewIcon(theme.DocumentIcon()),
-				widget.NewLabel(""),
-			)
+			return newExplorerTreeItem(pe)
 		},
 		pe.updateNode,
 	)
 	pe.tree.OnSelected = func(uid widget.TreeNodeID) {
 		pe.selected = uid
+		if pe.selectingOnly {
+			return
+		}
 		if uid == "" || pe.isBranch(uid) {
 			return
 		}
-		onFileSelect(uid)
+		if pe.onFileSelect != nil {
+			pe.onFileSelect(uid)
+		}
 	}
 
 	title := widget.NewLabelWithStyle("Explorador", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
@@ -77,6 +116,33 @@ func (pe *packageExplorer) setRoot(path string) {
 
 func (pe *packageExplorer) refresh() {
 	pe.tree.Refresh()
+}
+
+func (pe *packageExplorer) selectNodeOnly(uid string) {
+	pe.selectingOnly = true
+	pe.tree.Select(uid)
+	pe.selectingOnly = false
+}
+
+func (pe *packageExplorer) showContextMenu(uid string, ev *fyne.PointEvent) {
+	if uid == "" || (pe.root != "" && samePath(uid, pe.root)) {
+		return
+	}
+	pe.selectNodeOnly(uid)
+
+	renameItem := fyne.NewMenuItemWithIcon("Renomear", theme.SearchReplaceIcon(), func() {
+		pe.promptRename(uid)
+	})
+	deleteItem := fyne.NewMenuItemWithIcon("Excluir", theme.DeleteIcon(), func() {
+		pe.promptDelete(uid)
+	})
+	menu := fyne.NewMenu("", renameItem, fyne.NewMenuItemSeparator(), deleteItem)
+
+	canvas := pe.window.Canvas()
+	if treeCanvas := fyne.CurrentApp().Driver().CanvasForObject(pe.tree); treeCanvas != nil {
+		canvas = treeCanvas
+	}
+	widget.ShowPopUpMenuAtPosition(menu, canvas, ev.AbsolutePosition)
 }
 
 func (pe *packageExplorer) targetDir() (string, error) {
@@ -159,6 +225,94 @@ func (pe *packageExplorer) promptCreate(title, placeholder string, isDir bool) {
 	}, pe.window)
 }
 
+func (pe *packageExplorer) promptRename(uid string) {
+	if uid == "" || (pe.root != "" && samePath(uid, pe.root)) {
+		return
+	}
+	if _, err := os.Stat(uid); err != nil {
+		dialog.ShowError(err, pe.window)
+		return
+	}
+	oldName := filepath.Base(uid)
+
+	entry := widget.NewEntry()
+	entry.SetText(oldName)
+	form := []*widget.FormItem{
+		widget.NewFormItem("Novo nome", entry),
+	}
+	dialog.ShowForm("Renomear", "Renomear", "Cancelar", form, func(ok bool) {
+		if !ok {
+			return
+		}
+		name := strings.TrimSpace(entry.Text)
+		if err := validateExplorerName(name); err != nil {
+			dialog.ShowError(err, pe.window)
+			return
+		}
+		if name == oldName {
+			return
+		}
+		newPath := filepath.Join(filepath.Dir(uid), name)
+		if _, err := os.Stat(newPath); err == nil {
+			dialog.ShowError(fmt.Errorf("%q já existe", name), pe.window)
+			return
+		} else if !os.IsNotExist(err) {
+			dialog.ShowError(err, pe.window)
+			return
+		}
+		if err := os.Rename(uid, newPath); err != nil {
+			dialog.ShowError(err, pe.window)
+			return
+		}
+		pe.refresh()
+		if pe.onPathRenamed != nil {
+			pe.onPathRenamed(uid, newPath)
+		}
+		parent := filepath.Dir(newPath)
+		if parent != pe.root {
+			pe.tree.OpenBranch(parent)
+		}
+		pe.selectNodeOnly(newPath)
+	}, pe.window)
+}
+
+func (pe *packageExplorer) promptDelete(uid string) {
+	if uid == "" || (pe.root != "" && samePath(uid, pe.root)) {
+		return
+	}
+	info, err := os.Stat(uid)
+	if err != nil {
+		dialog.ShowError(err, pe.window)
+		return
+	}
+	name := filepath.Base(uid)
+	msg := fmt.Sprintf("Excluir permanentemente %q?", name)
+	if info.IsDir() {
+		msg = fmt.Sprintf("Excluir permanentemente a pasta %q e todo o conteúdo?", name)
+	}
+	dialog.ShowConfirm("Excluir", msg, func(ok bool) {
+		if !ok {
+			return
+		}
+		var removeErr error
+		if info.IsDir() {
+			removeErr = os.RemoveAll(uid)
+		} else {
+			removeErr = os.Remove(uid)
+		}
+		if removeErr != nil {
+			dialog.ShowError(removeErr, pe.window)
+			return
+		}
+		pe.selected = ""
+		pe.tree.UnselectAll()
+		pe.refresh()
+		if pe.onPathDeleted != nil {
+			pe.onPathDeleted(uid)
+		}
+	}, pe.window)
+}
+
 func validateExplorerName(name string) error {
 	if name == "" {
 		return fmt.Errorf("informe um nome")
@@ -227,31 +381,30 @@ func (pe *packageExplorer) isBranch(uid widget.TreeNodeID) bool {
 }
 
 func (pe *packageExplorer) updateNode(uid widget.TreeNodeID, branch bool, obj fyne.CanvasObject) {
-	box := obj.(*fyne.Container)
-	icon := box.Objects[0].(*widget.Icon)
-	label := box.Objects[1].(*widget.Label)
+	item := obj.(*explorerTreeItem)
+	item.uid = uid
 
 	if uid == "" {
-		icon.SetResource(theme.FolderIcon())
+		item.icon.SetResource(theme.FolderIcon())
 		if pe.root == "" {
-			label.SetText("Nenhuma pasta aberta")
+			item.label.SetText("Nenhuma pasta aberta")
 			return
 		}
-		label.SetText(filepath.Base(pe.root))
+		item.label.SetText(filepath.Base(pe.root))
 		return
 	}
 
 	name := filepath.Base(uid)
 	if branch || pe.isBranch(uid) {
-		icon.SetResource(theme.FolderIcon())
-		label.SetText(name)
+		item.icon.SetResource(theme.FolderIcon())
+		item.label.SetText(name)
 		return
 	}
 
 	if strings.HasSuffix(name, ".go") {
-		icon.SetResource(theme.FileTextIcon())
+		item.icon.SetResource(theme.FileTextIcon())
 	} else {
-		icon.SetResource(theme.DocumentIcon())
+		item.icon.SetResource(theme.DocumentIcon())
 	}
-	label.SetText(name)
+	item.label.SetText(name)
 }
