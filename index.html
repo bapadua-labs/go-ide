@@ -85,6 +85,10 @@
             <p>TextGrid com gutter de linhas, caret piscante e clique para posicionar o cursor.</p>
           </div>
           <div class="feature-card">
+            <h4>Seleção de texto</h4>
+            <p>Arraste com o mouse ou use Shift+setas; copie, corte, apague ou substitua o trecho selecionado.</p>
+          </div>
+          <div class="feature-card">
             <h4>Realce de sintaxe Go</h4>
             <p>Funções, tipos, packages, keywords, strings, comentários e números coloridos.</p>
           </div>
@@ -225,6 +229,9 @@ go build -o go-ide .
         <ul class="tips">
           <li>Caret vertical piscante (2px), visível a cada 530 ms com foco.</li>
           <li>Clique do mouse reposiciona o cursor na linha/coluna correta.</li>
+          <li>Seleção por arraste, Shift+setas/Home/End, Shift+clique ou Ctrl+A, com highlight visual.</li>
+          <li>Backspace/Delete apagam a seleção; digitar ou colar substitui o intervalo.</li>
+          <li>Ctrl+C / Ctrl+X copiam ou recortam só o trecho selecionado.</li>
           <li>Pilha de undo com até 100 entradas (Ctrl+Z).</li>
           <li>Formatação via <code>goimports</code> (Shift+Alt+F).</li>
         </ul>
@@ -345,6 +352,9 @@ go build -o go-ide .
             <tr><td>Desfazer</td><td><kbd>Ctrl</kbd> + <kbd>Z</kbd></td></tr>
             <tr><td>Copiar / Colar / Recortar</td><td><kbd>Ctrl</kbd> + <kbd>C</kbd> / <kbd>V</kbd> / <kbd>X</kbd></td></tr>
             <tr><td>Selecionar tudo</td><td><kbd>Ctrl</kbd> + <kbd>A</kbd></td></tr>
+            <tr><td>Estender seleção</td><td><kbd>Shift</kbd> + setas / <kbd>Home</kbd> / <kbd>End</kbd></td></tr>
+            <tr><td>Apagar seleção</td><td><kbd>Backspace</kbd> / <kbd>Delete</kbd></td></tr>
+            <tr><td>Limpar seleção</td><td><kbd>Esc</kbd></td></tr>
             <tr><td>Formatar documento</td><td><kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>F</kbd></td></tr>
             <tr><td>Fechar IDE</td><td><kbd>Ctrl</kbd> + <kbd>W</kbd></td></tr>
           </tbody>
@@ -400,6 +410,15 @@ go build -o go-ide .
         <p class="lead">Histórico das principais funcionalidades implementadas.</p>
 
         <div class="changelog">
+          <article class="changelog-entry">
+            <h3>Seleção de texto no editor</h3>
+            <p>Seleção por mouse e teclado; copy/cut/delete/paste operam no intervalo; highlight com a cor de seleção do tema.</p>
+            <ul>
+              <li><code>code_editor.go</code> — âncora/cursor, drag, Shift+setas e clipboard sobre a seleção</li>
+              <li><code>code_editor_test.go</code> — testes de offsets, select all, delete e extensão</li>
+            </ul>
+          </article>
+
           <article class="changelog-entry">
             <h3>Ícones nos menus</h3>
             <p>Ícones do tema Fyne em todos os itens dos menus Arquivo, Exibir, Terminal, Executar e Navegação.</p>
@@ -479,6 +498,7 @@ go build -o go-ide .
         </div>
         <ol class="tips">
           <li>Abra um arquivo <code>.go</code> e verifique realce de sintaxe e rainbow brackets.</li>
+          <li>Selecione texto com o mouse ou Shift+setas; teste Ctrl+C / Ctrl+X e Backspace sobre a seleção.</li>
           <li>Use <strong>Arquivo → Formatar documento</strong> (Shift+Alt+F).</li>
           <li>Pressione <strong>F5</strong> para executar — o terminal abre e exibe só a saída.</li>
           <li>Abra uma pasta com código Go e teste autocomplete (<code>fmt.</code>).</li>
