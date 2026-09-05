@@ -182,18 +182,17 @@ func (tp *termPanel) whenReady(fn func(*terminal.Terminal)) {
 }
 
 func (tp *termPanel) displayOutput(t *terminal.Terminal, output string) {
-	encoded := base64.StdEncoding.EncodeToString([]byte(output))
-	delim := fmt.Sprintf("GOIDE_%d", time.Now().UnixNano())
-
 	var script string
 	if runtime.GOOS == "windows" {
 		escaped := strings.ReplaceAll(output, "'", "''")
 		script = fmt.Sprintf("Clear-Host; Write-Output '%s'\n", escaped)
 	} else {
-		script = "stty -echo 2>/dev/null\n"
-		script += "clear\n"
-		script += fmt.Sprintf("base64 -d <<'%s'\n%s\n%s\n", delim, encoded, delim)
-		script += "stty echo 2>/dev/null\n"
+		encoded := base64.StdEncoding.EncodeToString([]byte(output))
+		// Comando de uma linha evita prompts PS2 (>) do heredoc em shell interativo.
+		script = fmt.Sprintf(
+			"stty -echo 2>/dev/null; clear; printf '%%s' '%s' | base64 -d; stty echo 2>/dev/null\n",
+			encoded,
+		)
 	}
 
 	payload := []byte(script)

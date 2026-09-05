@@ -339,6 +339,7 @@ func (ed *codeEditor) doRefreshGrid(size fyne.Size) {
 	cursorBG := th.Color(theme.ColorNameSelection, theme.VariantDark)
 
 	bracketIdx := bracketColors(display)
+	syntaxIdx := goSyntaxHighlight(display)
 	lines := strings.Split(display, "\n")
 	if len(lines) == 0 {
 		lines = []string{""}
@@ -354,6 +355,8 @@ func (ed *codeEditor) doRefreshGrid(size fyne.Size) {
 			if isPlaceholder {
 				style.FGColor = placeholderFG
 			} else if c := bracketColorAt(display, bracketIdx, bytePos); c != nil {
+				style.FGColor = c
+			} else if c := syntaxColorAt(display, syntaxIdx, bytePos); c != nil {
 				style.FGColor = c
 			}
 			if ed.hasFocus && !isPlaceholder && row == ed.cursorRow && col == ed.cursorCol {

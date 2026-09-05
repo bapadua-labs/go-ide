@@ -1,5 +1,43 @@
 # Changelog
 
+## Realce de sintaxe Go no editor
+
+### Novos arquivos
+
+| Arquivo | Descrição |
+|---|---|
+| `highlight.go` | Parser de sintaxe Go com coloração por token |
+| `highlight_test.go` | Testes do realce de sintaxe |
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `code_editor.go` | Integra `goSyntaxHighlight` junto aos rainbow brackets |
+
+### Paleta de sintaxe
+
+| Elemento | Cor | Exemplos |
+|---|---|---|
+| Funções | `#61afef` (azul) | `Hello`, `Println` |
+| Structs/tipos | `#e5c07b` (amarelo) | `User`, tipos declarados com `type` |
+| Packages | `#56b6c2` (ciano) | `main`, paths e aliases em `import` |
+| Keywords | `#c678dd` (roxo) | `func`, `type`, `struct`, `import` |
+| Strings | `#98c379` (verde) | `"texto"`, `` `raw` `` |
+| Comentários | `#5c6370` (cinza) | `//` e `/* */` |
+| Números | `#d19a66` (laranja) | `42`, `0xFF`, `3.14` |
+
+### Detecção
+
+- Declarações `func Nome()` e métodos `func (r *T) Nome()`
+- Chamadas `pkg.Funcao()` (identificador após `.`)
+- Declarações `type Nome struct` e reuso do tipo no código
+- `package main` e paths/aliases em blocos `import`
+- Ignora strings e comentários (mesma lógica dos rainbow brackets)
+- Rainbow brackets mantêm prioridade sobre a sintaxe nos caracteres `()`, `[]` e `{}`
+
+---
+
 ## Correção da execução no terminal
 
 ### Alterações
@@ -7,7 +45,7 @@
 | Arquivo | Descrição |
 |---|---|
 | `run.go` | Execução via `exec.Command` em vez de comando no shell; `ensureTerminalOpen` sincroniza o painel antes de rodar |
-| `terminal_panel.go` | `whenReady` aguarda o shell ficar pronto; `runGoFile` e `displayOutput` exibem só a saída do programa |
+| `terminal_panel.go` | `whenReady` aguarda o shell ficar pronto; `runGoFile` e `displayOutput` exibem só a saída do programa (sem prompts `>` de heredoc) |
 
 ### Problemas corrigidos
 
@@ -15,12 +53,14 @@
 
 **Comando visível no terminal:** o `go run` era digitado no shell interativo e aparecia ecoado junto com a saída.
 
+**Prompts `>` antes da saída:** o script de exibição usava heredoc (`base64 -d <<'...'`), e o bash interativo mostrava dois prompts de continuação (PS2) — um por linha do heredoc — antes de imprimir o resultado do programa.
+
 ### Solução
 
 1. `ensureTerminalOpen` abre o painel, cria a aba se necessário e força refresh do layout
 2. `whenReady` aguarda o terminal aceitar entrada (até ~10 s) antes de executar
 3. `go run` é executado diretamente com `exec.Command`, capturando stdout e stderr
-4. Apenas o resultado é exibido no terminal (com `stty -echo` + `base64` no Linux para ocultar o script intermediário)
+4. Apenas o resultado é exibido no terminal (com `stty -echo` + `printf | base64 -d` em uma linha no Linux, evitando heredoc e prompts PS2)
 
 ---
 
@@ -93,8 +133,9 @@ go build -o go-ide .
 ./go-ide
 ```
 
-1. Abra um arquivo `.go` — os brackets devem aparecer coloridos por nível
-2. Verifique o tema escuro na interface (menus, explorador, editor)
-3. Use **Arquivo → Formatar documento** (Shift+Alt+F) em arquivos Go
-4. Use **Executar → Executar arquivo** (F5) para rodar o arquivo atual — o terminal abre automaticamente e exibe apenas a saída
-5. Use **Arquivo → Propriedades** para configurar o caminho do Go
+1. Abra um arquivo `.go` — funções, tipos, packages, keywords e strings devem aparecer com cores distintas
+2. Verifique os rainbow brackets coloridos por nível de aninhamento
+3. Verifique o tema escuro na interface (menus, explorador, editor)
+4. Use **Arquivo → Formatar documento** (Shift+Alt+F) em arquivos Go
+5. Use **Executar → Executar arquivo** (F5) para rodar o arquivo atual — o terminal abre automaticamente e exibe apenas a saída
+6. Use **Arquivo → Propriedades** para configurar o caminho do Go
