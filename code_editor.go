@@ -7,11 +7,14 @@ import (
 	"unicode/utf8"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
+
+const caretWidth = 2
 
 type codeEditor struct {
 	widget.BaseWidget
@@ -21,6 +24,9 @@ type codeEditor struct {
 	text           string
 	cursorRow      int
 	cursorCol      int
+	cursorVisible  bool
+	blinkStop      chan struct{}
+	caret          *canvas.Rectangle
 	placeholder    string
 	hasFocus       bool
 	ctrlDown       bool
@@ -39,14 +45,21 @@ func newCodeEditor() *codeEditor {
 		grid: widget.NewTextGrid(),
 	}
 	ed.grid.ShowLineNumbers = true
+	ed.grid.Scroll = fyne.ScrollNone
 	ed.ExtendBaseWidget(ed)
 	return ed
 }
 
 func (ed *codeEditor) CreateRenderer() fyne.WidgetRenderer {
 	ed.scroll = container.NewScroll(ed.grid)
+	ed.scroll.OnScrolled = func(_ fyne.Position) {
+		ed.updateCaret()
+	}
 	ed.completionLayer = container.NewWithoutLayout()
 	ed.completionLayer.Hide()
+	th := fyne.CurrentApp().Settings().Theme()
+	ed.caret = canvas.NewRectangle(th.Color(theme.ColorNameForeground, theme.VariantDark))
+	ed.caret.Hidden = true
 	if ed.pendingRefresh || ed.placeholder != "" || ed.text != "" {
 		ed.pendingRefresh = false
 		ed.doRefreshGrid(ed.MinSize())
@@ -54,6 +67,7 @@ func (ed *codeEditor) CreateRenderer() fyne.WidgetRenderer {
 	return &codeEditorRenderer{
 		editor:  ed,
 		scroll:  ed.scroll,
+		caret:   ed.caret,
 		overlay: ed.completionLayer,
 	}
 }
@@ -64,11 +78,14 @@ func (ed *codeEditor) MinSize() fyne.Size {
 
 func (ed *codeEditor) FocusGained() {
 	ed.hasFocus = true
+	ed.cursorVisible = true
+	ed.startCursorBlink()
 	ed.refreshGrid()
 }
 
 func (ed *codeEditor) FocusLost() {
 	ed.hasFocus = false
+	ed.stopCursorBlink()
 	ed.refreshGrid()
 }
 
@@ -204,21 +221,149 @@ func (ed *codeEditor) initCompletion() {
 	)
 }
 
+func (ed *codeEditor) lineNumberWidth() int {
+	if ed.grid == nil || !ed.grid.ShowLineNumbers {
+		return 0
+	}
+	lineCount := len(ed.grid.Rows)
+	if lineCount == 0 {
+		lineCount = 1
+	}
+	return len(fmt.Sprintf("%d", lineCount))
+}
+
+func (ed *codeEditor) gutterCols() int {
+	if ed.lineNumberWidth() == 0 {
+		return 0
+	}
+	return ed.lineNumberWidth() + 1
+}
+
+func (ed *codeEditor) gridColForCursor() int {
+	return ed.gutterCols() + ed.cursorDisplayCol()
+}
+
+func (ed *codeEditor) gridOriginInEditor() fyne.Position {
+	driver := fyne.CurrentApp().Driver()
+	return driver.AbsolutePositionForObject(ed.grid).Subtract(driver.AbsolutePositionForObject(ed))
+}
+
+func (ed *codeEditor) gridPointFromEditorPoint(pos fyne.Position) fyne.Position {
+	return pos.Subtract(ed.gridOriginInEditor())
+}
+
+func (ed *codeEditor) cursorDisplayCol() int {
+	lines := ed.lines()
+	if ed.cursorRow < 0 || ed.cursorRow >= len(lines) {
+		return 0
+	}
+	line := lines[ed.cursorRow]
+	col := 0
+	for i := 0; i < ed.cursorCol && i < len(line); {
+		_, size := utf8.DecodeRuneInString(line[i:])
+		i += size
+		col++
+	}
+	return col
+}
+
+func (ed *codeEditor) caretPosition() fyne.Position {
+	if ed.grid == nil {
+		return fyne.NewPos(0, 0)
+	}
+	cellPos := ed.grid.PositionForCursorLocation(ed.cursorRow, ed.gridColForCursor())
+	return ed.gridOriginInEditor().Add(cellPos)
+}
+
 func (ed *codeEditor) completionPopupRelPos() fyne.Position {
 	if ed.grid == nil {
 		return fyne.NewPos(0, 0)
 	}
 
-	cell := ed.textCellSize()
-	lineCount := len(ed.lines())
-	gutterCols := len(fmt.Sprintf("%d", lineCount)) + 1
+	cellPos := ed.grid.PositionForCursorLocation(ed.cursorRow, ed.gridColForCursor())
+	below := ed.grid.PositionForCursorLocation(ed.cursorRow+1, ed.gridColForCursor())
+	return ed.gridOriginInEditor().Add(fyne.NewPos(cellPos.X, below.Y))
+}
 
-	relX := float32(gutterCols+ed.cursorCol) * cell.Width
-	relY := float32(ed.cursorRow+1) * cell.Height
+func (ed *codeEditor) setCursorFromPoint(pos fyne.Position) {
+	if ed.grid == nil {
+		return
+	}
 
-	driver := fyne.CurrentApp().Driver()
-	gridInEditor := driver.AbsolutePositionForObject(ed.grid).Subtract(driver.AbsolutePositionForObject(ed))
-	return gridInEditor.Add(fyne.NewPos(relX, relY))
+	gridPos := ed.gridPointFromEditorPoint(pos)
+	row, col := ed.grid.CursorLocationForPosition(gridPos)
+	textCol := col - ed.gutterCols()
+	if textCol < 0 {
+		textCol = 0
+	}
+
+	lines := ed.lines()
+	if row < 0 {
+		row = 0
+	}
+	if row >= len(lines) {
+		row = len(lines) - 1
+	}
+
+	line := lines[row]
+	byteCol := 0
+	for i := 0; i < textCol && byteCol < len(line); i++ {
+		_, size := utf8.DecodeRuneInString(line[byteCol:])
+		byteCol += size
+	}
+	if textCol > utf8.RuneCountInString(line) {
+		byteCol = len(line)
+	}
+
+	ed.cursorRow = row
+	ed.cursorCol = byteCol
+	ed.clampCursor()
+	ed.cursorVisible = true
+	ed.hideCompletion()
+	ed.refreshGrid()
+}
+
+func (ed *codeEditor) startCursorBlink() {
+	ed.stopCursorBlink()
+	ed.blinkStop = make(chan struct{})
+	stop := ed.blinkStop
+	go func() {
+		ticker := time.NewTicker(530 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				fyne.Do(func() {
+					if ed.blinkStop != stop {
+						return
+					}
+					ed.cursorVisible = !ed.cursorVisible
+					ed.updateCaret()
+				})
+			case <-stop:
+				return
+			}
+		}
+	}()
+}
+
+func (ed *codeEditor) stopCursorBlink() {
+	if ed.blinkStop != nil {
+		close(ed.blinkStop)
+		ed.blinkStop = nil
+	}
+}
+
+func (ed *codeEditor) updateCaret() {
+	if ed.caret == nil || ed.grid == nil {
+		return
+	}
+	top := ed.grid.PositionForCursorLocation(ed.cursorRow, ed.gridColForCursor())
+	bottom := ed.grid.PositionForCursorLocation(ed.cursorRow+1, ed.gridColForCursor())
+	ed.caret.Move(ed.caretPosition())
+	ed.caret.Resize(fyne.NewSize(caretWidth, bottom.Y-top.Y))
+	ed.caret.Hidden = !ed.hasFocus || !ed.cursorVisible
+	ed.caret.Refresh()
 }
 
 func (ed *codeEditor) acceptCompletion() bool {
@@ -227,11 +372,6 @@ func (ed *codeEditor) acceptCompletion() bool {
 	}
 	ed.completion.AcceptSelected()
 	return true
-}
-
-func (ed *codeEditor) textCellSize() fyne.Size {
-	th := fyne.CurrentApp().Settings().Theme()
-	return fyne.MeasureText("M", th.Size(theme.SizeNameText), fyne.TextStyle{Monospace: true})
 }
 
 func (ed *codeEditor) requestCompletion() {
@@ -507,6 +647,9 @@ func (ed *codeEditor) selectionOffsets() (int, int) {
 }
 
 func (ed *codeEditor) refreshGrid() {
+	if ed.hasFocus {
+		ed.cursorVisible = true
+	}
 	if ed.scroll == nil {
 		ed.pendingRefresh = true
 		ed.Refresh()
@@ -533,7 +676,6 @@ func (ed *codeEditor) doRefreshGrid(size fyne.Size) {
 	th := fyne.CurrentApp().Settings().Theme()
 	fg := th.Color(theme.ColorNameForeground, theme.VariantDark)
 	placeholderFG := th.Color(theme.ColorNamePlaceHolder, theme.VariantDark)
-	cursorBG := th.Color(theme.ColorNameSelection, theme.VariantDark)
 
 	bracketIdx := bracketColors(display)
 	syntaxIdx := goSyntaxHighlight(display)
@@ -556,18 +698,9 @@ func (ed *codeEditor) doRefreshGrid(size fyne.Size) {
 			} else if c := syntaxColorAt(display, syntaxIdx, bytePos); c != nil {
 				style.FGColor = c
 			}
-			if ed.hasFocus && !isPlaceholder && row == ed.cursorRow && col == ed.cursorCol {
-				style.BGColor = cursorBG
-			}
 			cells = append(cells, widget.TextGridCell{Rune: r, Style: style})
 			col += size
 			bytePos += size
-		}
-		if ed.hasFocus && !isPlaceholder && row == ed.cursorRow && ed.cursorCol == len(line) {
-			cells = append(cells, widget.TextGridCell{
-				Rune:  ' ',
-				Style: &widget.CustomTextGridStyle{FGColor: fg, BGColor: cursorBG},
-			})
 		}
 		rows[row] = widget.TextGridRow{Cells: cells}
 		bytePos++ // newline
@@ -581,25 +714,29 @@ func (ed *codeEditor) doRefreshGrid(size fyne.Size) {
 	}
 	ed.grid.Resize(fyne.NewSize(width, size.Height))
 	ed.grid.Refresh()
+	ed.updateCaret()
 }
 
 var _ desktop.Keyable = (*codeEditor)(nil)
 
-func (ed *codeEditor) Tapped(_ *fyne.PointEvent) {
+func (ed *codeEditor) Tapped(ev *fyne.PointEvent) {
 	if c := fyne.CurrentApp().Driver().CanvasForObject(ed); c != nil {
 		c.Focus(ed)
 	}
+	ed.setCursorFromPoint(ev.Position)
 }
 
 type codeEditorRenderer struct {
 	editor  *codeEditor
 	scroll  *container.Scroll
+	caret   *canvas.Rectangle
 	overlay *fyne.Container
 }
 
 func (r *codeEditorRenderer) Layout(size fyne.Size) {
 	r.scroll.Resize(size)
 	r.scroll.Move(fyne.NewPos(0, 0))
+	r.editor.updateCaret()
 	r.layoutCompletion()
 }
 
@@ -618,6 +755,7 @@ func (r *codeEditorRenderer) MinSize() fyne.Size {
 
 func (r *codeEditorRenderer) Refresh() {
 	r.scroll.Refresh()
+	r.editor.updateCaret()
 	if r.overlay.Visible() {
 		r.layoutCompletion()
 		r.overlay.Refresh()
@@ -625,7 +763,9 @@ func (r *codeEditorRenderer) Refresh() {
 }
 
 func (r *codeEditorRenderer) Objects() []fyne.CanvasObject {
-	return []fyne.CanvasObject{r.scroll, r.overlay}
+	return []fyne.CanvasObject{r.scroll, r.caret, r.overlay}
 }
 
-func (r *codeEditorRenderer) Destroy() {}
+func (r *codeEditorRenderer) Destroy() {
+	r.editor.stopCursorBlink()
+}

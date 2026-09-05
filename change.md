@@ -1,5 +1,30 @@
 # Changelog
 
+## Cursor do editor
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `code_editor.go` | Caret vertical piscante, posicionamento por clique do mouse e alinhamento via API do `TextGrid` |
+
+### Comportamento
+
+- **Caret visível:** barra vertical de 2px na cor do texto, piscando a cada 530 ms quando o editor tem foco
+- **Clique do mouse:** reposiciona o cursor na linha e coluna correspondentes ao ponto clicado
+- **Reset do piscar:** ao digitar, mover o cursor ou clicar, o caret volta a ficar visível
+- **Scroll:** o caret acompanha o deslocamento do conteúdo ao rolar o editor
+
+### Problemas corrigidos
+
+**Cursor pouco visível:** o destaque de fundo na célula do `TextGrid` foi substituído por um caret dedicado, mais perceptível e com animação de piscar.
+
+**Clique não movia o cursor:** `Tapped` apenas focava o editor; agora converte a posição do clique em linha/coluna, considerando gutter de numeração, scroll e UTF-8.
+
+**Caret desalinhado (1–2 colunas à frente):** o posicionamento manual usava tamanho de célula sem arredondamento e conflitava com o scroll interno do `TextGrid`. Corrigido desativando o scroll interno (`ScrollNone`) e usando `PositionForCursorLocation` / `CursorLocationForPosition` do próprio grid.
+
+---
+
 ## Autocomplete com gopls
 
 ### Novos arquivos
@@ -178,7 +203,7 @@
 - Substitui o `widget.MultiLineEntry` padrão do Fyne
 - Renderiza código com `TextGrid` e números de linha
 - Atualiza cores dos brackets em tempo real ao digitar
-- Destaca a posição do cursor
+- Destaca a posição do cursor com caret vertical piscante
 - Suporta navegação (setas, Home, End), edição (Backspace, Delete, Tab, Enter) e atalhos Ctrl+C/V/X/A
 - Exibe placeholder quando o editor está vazio e sem foco
 
@@ -209,3 +234,4 @@ go build -o go-ide .
 5. Use **Executar → Executar arquivo** (F5) para rodar o arquivo atual — o terminal abre automaticamente e exibe apenas a saída
 6. Use **Arquivo → Propriedades** para configurar o caminho do Go
 7. Abra uma pasta com código Go e teste o autocomplete: digite `fmt.` — a lista deve aparecer compacta (6 linhas) abaixo do cursor; continue digitando para filtrar; use **Enter** para aceitar ou **Esc** para fechar
+8. Clique em qualquer ponto do código — o cursor deve ir para a posição clicada; verifique o caret piscando alinhado ao texto
