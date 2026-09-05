@@ -26,6 +26,7 @@ type goplsClient struct {
 	goroot  string
 	docs    map[string]int32
 	ready   bool
+	onDiag  func(string, []fileDiagnostic)
 }
 
 type completionSuggestion struct {
@@ -55,6 +56,7 @@ func (g *goplsClient) start(goroot, rootPath string) error {
 	if rootPath == "" {
 		return fmt.Errorf("abra uma pasta de projeto para usar o autocomplete")
 	}
+	rootPath = normalizePath(rootPath)
 
 	bin, err := resolveToolBinary(goroot, "gopls")
 	if err != nil {
@@ -93,7 +95,7 @@ func (g *goplsClient) start(goroot, rootPath string) error {
 		Closer: stdin,
 	})
 
-	_, conn, server := protocol.NewClient(ctx, protocol.UnimplementedClient{}, stream)
+	_, conn, server := protocol.NewClient(ctx, &ideLSPClient{g: g}, stream)
 
 	pid := int32(os.Getpid())
 	wsFolders := protocol.NewNullable([]protocol.WorkspaceFolder{{
@@ -113,8 +115,21 @@ func (g *goplsClient) start(goroot, rootPath string) error {
 		Capabilities: protocol.ClientCapabilities{
 			Workspace: &protocol.WorkspaceClientCapabilities{
 				WorkspaceFolders: boolPtr(true),
+				ApplyEdit:        boolPtr(true),
 			},
 			TextDocument: &protocol.TextDocumentClientCapabilities{
+				PublishDiagnostics: &protocol.PublishDiagnosticsClientCapabilities{},
+				Definition:         &protocol.DefinitionClientCapabilities{LinkSupport: boolPtr(true)},
+				References:         &protocol.ReferenceClientCapabilities{},
+				Hover: &protocol.HoverClientCapabilities{
+					ContentFormat: []protocol.MarkupKind{protocol.MarkupKindMarkdown, protocol.MarkupKindPlainText},
+				},
+				Rename: &protocol.RenameClientCapabilities{PrepareSupport: boolPtr(true)},
+				SignatureHelp: &protocol.SignatureHelpClientCapabilities{
+					SignatureInformation: &protocol.ClientSignatureInformationOptions{
+						DocumentationFormat: []protocol.MarkupKind{protocol.MarkupKindMarkdown, protocol.MarkupKindPlainText},
+					},
+				},
 				Completion: &protocol.CompletionClientCapabilities{
 					ContextSupport: boolPtr(true),
 					CompletionItem: &protocol.ClientCompletionItemOptions{
@@ -189,6 +204,7 @@ func (g *goplsClient) openDocument(path, text string) error {
 	if !g.ready || path == "" {
 		return nil
 	}
+	path = normalizePath(path)
 
 	version := g.docs[path] + 1
 	g.docs[path] = version
@@ -212,6 +228,7 @@ func (g *goplsClient) changeDocument(path, text string) error {
 	if !g.ready || path == "" {
 		return nil
 	}
+	path = normalizePath(path)
 
 	version := g.docs[path] + 1
 	g.docs[path] = version
@@ -236,6 +253,7 @@ func (g *goplsClient) closeDocument(path string) error {
 	if !g.ready || path == "" {
 		return nil
 	}
+	path = normalizePath(path)
 
 	delete(g.docs, path)
 
@@ -253,6 +271,7 @@ func (g *goplsClient) completions(path, text string, row, byteCol int) ([]comple
 		g.mu.Unlock()
 		return nil, nil
 	}
+	path = normalizePath(path)
 	server := g.server
 	ctx := g.ctx
 	g.mu.Unlock()
@@ -343,4 +362,126 @@ func (g *goplsClient) syncDocument(path, text string) error {
 		return g.changeDocument(path, text)
 	}
 	return g.openDocument(path, text)
+}
+
+func (g *goplsClient) setDiagnosticsHandler(fn func(string, []fileDiagnostic)) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.onDiag = fn
+}
+
+func (g *goplsClient) notifyDiagnostics(path string, diags []fileDiagnostic) {
+	path = normalizePath(path)
+	g.mu.Lock()
+	fn := g.onDiag
+	g.mu.Unlock()
+	if fn != nil {
+		fn(path, diags)
+	}
+}
+
+func (g *goplsClient) isReady() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.ready
+}
+
+func (g *goplsClient) textPositionParams(path, text string, row, byteCol int) *protocol.TextDocumentPositionParams {
+	path = normalizePath(path)
+	return &protocol.TextDocumentPositionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri.File(path)},
+		Position:     byteOffsetToPosition(text, row, byteCol),
+	}
+}
+
+func (g *goplsClient) definition(path, text string, row, byteCol int) (protocol.DefinitionResult, error) {
+	g.mu.Lock()
+	if !g.ready || path == "" {
+		g.mu.Unlock()
+		return nil, nil
+	}
+	server := g.server
+	ctx := g.ctx
+	g.mu.Unlock()
+
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return server.Definition(callCtx, &protocol.DefinitionParams{
+		TextDocumentPositionParams: *g.textPositionParams(path, text, row, byteCol),
+	})
+}
+
+func (g *goplsClient) references(path, text string, row, byteCol int) ([]protocol.Location, error) {
+	g.mu.Lock()
+	if !g.ready || path == "" {
+		g.mu.Unlock()
+		return nil, nil
+	}
+	server := g.server
+	ctx := g.ctx
+	g.mu.Unlock()
+
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return server.References(callCtx, &protocol.ReferenceParams{
+		TextDocumentPositionParams: *g.textPositionParams(path, text, row, byteCol),
+		Context: protocol.ReferenceContext{
+			IncludeDeclaration: true,
+		},
+	})
+}
+
+func (g *goplsClient) hover(path, text string, row, byteCol int) (*protocol.Hover, error) {
+	g.mu.Lock()
+	if !g.ready || path == "" {
+		g.mu.Unlock()
+		return nil, nil
+	}
+	server := g.server
+	ctx := g.ctx
+	g.mu.Unlock()
+
+	callCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return server.Hover(callCtx, &protocol.HoverParams{
+		TextDocumentPositionParams: *g.textPositionParams(path, text, row, byteCol),
+	})
+}
+
+func (g *goplsClient) signatureHelp(path, text string, row, byteCol int) (*protocol.SignatureHelp, error) {
+	g.mu.Lock()
+	if !g.ready || path == "" {
+		g.mu.Unlock()
+		return nil, nil
+	}
+	server := g.server
+	ctx := g.ctx
+	g.mu.Unlock()
+
+	callCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return server.SignatureHelp(callCtx, &protocol.SignatureHelpParams{
+		TextDocumentPositionParams: *g.textPositionParams(path, text, row, byteCol),
+		Context: protocol.SignatureHelpContext{
+			TriggerKind: protocol.SignatureHelpTriggerKindInvoked,
+		},
+	})
+}
+
+func (g *goplsClient) rename(path, text string, row, byteCol int, newName string) (*protocol.WorkspaceEdit, error) {
+	g.mu.Lock()
+	if !g.ready || path == "" {
+		g.mu.Unlock()
+		return nil, fmt.Errorf("gopls não está pronto")
+	}
+	server := g.server
+	ctx := g.ctx
+	g.mu.Unlock()
+
+	callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return server.Rename(callCtx, &protocol.RenameParams{
+		TextDocumentPositionParams: *g.textPositionParams(path, text, row, byteCol),
+		NewName:                    newName,
+	})
 }

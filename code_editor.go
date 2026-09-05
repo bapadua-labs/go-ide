@@ -45,6 +45,19 @@ type codeEditor struct {
 	completionTimer *time.Timer
 	undoStack       []editorSnapshot
 	onAppShortcut   func(fyne.Shortcut)
+	onGoToDefinition func(row, col int)
+	onFindReferences func(row, col int)
+	onRename         func(row, col int)
+	onHover          func(row, col int)
+	onSignatureHelp  func(row, col int)
+	diagnostics      []fileDiagnostic
+	hoverLayer       *fyne.Container
+	signatureLayer   *fyne.Container
+	hoverPopup       *lspTextPopup
+	signaturePopup   *lspTextPopup
+	hoverTimer       *time.Timer
+	lastHoverRow     int
+	lastHoverCol     int
 	OnChanged       func(string)
 	OnCompletion    func(row, col int)
 }
@@ -66,6 +79,12 @@ func (ed *codeEditor) CreateRenderer() fyne.WidgetRenderer {
 	}
 	ed.completionLayer = container.NewWithoutLayout()
 	ed.completionLayer.Hide()
+	ed.hoverLayer = container.NewWithoutLayout()
+	ed.hoverLayer.Hide()
+	ed.signatureLayer = container.NewWithoutLayout()
+	ed.signatureLayer.Hide()
+	ed.hoverPopup = newLSPTextPopup(ed.hoverLayer)
+	ed.signaturePopup = newLSPTextPopup(ed.signatureLayer)
 	th := fyne.CurrentApp().Settings().Theme()
 	ed.caret = canvas.NewRectangle(th.Color(theme.ColorNameForeground, theme.VariantDark))
 	ed.caret.Hidden = true
@@ -74,10 +93,12 @@ func (ed *codeEditor) CreateRenderer() fyne.WidgetRenderer {
 		ed.doRefreshGrid(ed.MinSize())
 	}
 	return &codeEditorRenderer{
-		editor:  ed,
-		scroll:  ed.scroll,
-		caret:   ed.caret,
-		overlay: ed.completionLayer,
+		editor:    ed,
+		scroll:    ed.scroll,
+		caret:     ed.caret,
+		overlay:   ed.completionLayer,
+		hover:     ed.hoverLayer,
+		signature: ed.signatureLayer,
 	}
 }
 
@@ -194,6 +215,14 @@ func (ed *codeEditor) TypedKey(ev *fyne.KeyEvent) {
 		ed.hideCompletion()
 		ed.cursorCol = ed.lineLen(ed.cursorRow)
 		ed.refreshGrid()
+	case fyne.KeyF12:
+		if ed.onGoToDefinition != nil {
+			ed.onGoToDefinition(ed.cursorRow, ed.cursorCol)
+		}
+	case fyne.KeyF2:
+		if ed.onRename != nil {
+			ed.onRename(ed.cursorRow, ed.cursorCol)
+		}
 	}
 }
 
@@ -217,6 +246,85 @@ func (ed *codeEditor) CursorRow() int {
 
 func (ed *codeEditor) CursorCol() int {
 	return ed.cursorCol
+}
+
+func (ed *codeEditor) SetCursor(row, col int) {
+	ed.cursorRow = row
+	ed.cursorCol = col
+	ed.clampCursor()
+	ed.refreshGrid()
+}
+
+func (ed *codeEditor) SetDiagnostics(diags []fileDiagnostic) {
+	ed.diagnostics = diags
+	ed.refreshGrid()
+}
+
+func (ed *codeEditor) ShowHover(content string) {
+	ed.ShowHoverAt(ed.cursorRow, ed.cursorCol, content)
+}
+
+func (ed *codeEditor) ShowHoverAt(row, byteCol int, content string) {
+	ed.signaturePopup.Hide()
+	pos := ed.popupPositionFor(row, byteCol)
+	ed.hoverPopup.ShowAt(pos, content)
+}
+
+func (ed *codeEditor) ShowSignatureHelp(content string) {
+	ed.hoverPopup.Hide()
+	pos := ed.completionPopupRelPos()
+	ed.signaturePopup.ShowAt(pos, content)
+}
+
+func (ed *codeEditor) popupPositionFor(row, byteCol int) fyne.Position {
+	if ed.grid == nil {
+		return fyne.NewPos(0, 0)
+	}
+	gridCol := ed.gutterCols() + ed.displayColFor(row, byteCol)
+	cellPos := ed.grid.PositionForCursorLocation(row, gridCol)
+	below := ed.grid.PositionForCursorLocation(row+1, gridCol)
+	return ed.gridOriginInEditor().Add(fyne.NewPos(cellPos.X, below.Y+2))
+}
+
+func (ed *codeEditor) displayColFor(row, byteCol int) int {
+	lines := ed.lines()
+	if row < 0 || row >= len(lines) {
+		return 0
+	}
+	line := lines[row]
+	col := 0
+	for i := 0; i < byteCol && i < len(line); {
+		_, size := utf8.DecodeRuneInString(line[i:])
+		i += size
+		col++
+	}
+	return col
+}
+
+func (ed *codeEditor) hideLSPPopups() {
+	ed.hoverPopup.Hide()
+	ed.signaturePopup.Hide()
+}
+
+func (ed *codeEditor) scheduleHover(row, col int) {
+	if ed.onHover == nil {
+		return
+	}
+	if ed.hoverTimer != nil {
+		ed.hoverTimer.Stop()
+	}
+	ed.lastHoverRow = row
+	ed.lastHoverCol = col
+	ed.hoverTimer = time.AfterFunc(400*time.Millisecond, func() {
+		fyne.Do(func() {
+			if ed.lastHoverRow != row || ed.lastHoverCol != col {
+				return
+			}
+			if ed.onHover != nil {
+				ed.onHover(ed.lastHoverRow, ed.lastHoverCol)
+			}
+		})
+	})
 }
 
 func (ed *codeEditor) initCompletion() {
@@ -469,9 +577,10 @@ func (ed *codeEditor) applyCompletion(item completionSuggestion) {
 	if from > to {
 		from, to = to, from
 	}
+	insert := expandSnippet(item.InsertText)
 	ed.pushUndo()
-	ed.text = ed.text[:from] + item.InsertText + ed.text[to:]
-	ed.setCursorFromOffset(from + len(item.InsertText))
+	ed.text = ed.text[:from] + insert + ed.text[to:]
+	ed.setCursorFromOffset(from + len(insert))
 	ed.refreshGrid()
 	ed.notifyChanged()
 }
@@ -585,6 +694,9 @@ func (ed *codeEditor) insertString(s string) {
 	ed.setCursorFromOffset(offset + len(s))
 	ed.refreshGrid()
 	ed.notifyChanged()
+	if strings.Contains(s, "(") && ed.onSignatureHelp != nil {
+		ed.onSignatureHelp(ed.cursorRow, ed.cursorCol)
+	}
 }
 
 func (ed *codeEditor) deleteBefore() {
@@ -739,6 +851,8 @@ func (ed *codeEditor) doRefreshGrid(size fyne.Size) {
 			style := &widget.CustomTextGridStyle{FGColor: fg}
 			if isPlaceholder {
 				style.FGColor = placeholderFG
+			} else if d := diagnosticForBytePos(display, ed.diagnostics, bytePos); d != nil {
+				style = diagnosticStyle(d.Severity, fg)
 			} else if c := bracketColorAt(display, bracketIdx, bytePos); c != nil {
 				style.FGColor = c
 			} else if c := syntaxColorAt(display, syntaxIdx, bytePos); c != nil {
@@ -768,6 +882,18 @@ var _ fyne.Shortcutable = (*codeEditor)(nil)
 
 func (ed *codeEditor) TypedShortcut(shortcut fyne.Shortcut) {
 	switch s := shortcut.(type) {
+	case *desktop.CustomShortcut:
+		switch {
+		case s.KeyName == fyne.KeyF12 && s.Modifier == fyne.KeyModifierShift && ed.onFindReferences != nil:
+			ed.onFindReferences(ed.cursorRow, ed.cursorCol)
+			return
+		case s.KeyName == fyne.KeyF12 && ed.onGoToDefinition != nil:
+			ed.onGoToDefinition(ed.cursorRow, ed.cursorCol)
+			return
+		case s.KeyName == fyne.KeyF2 && ed.onRename != nil:
+			ed.onRename(ed.cursorRow, ed.cursorCol)
+			return
+		}
 	case *fyne.ShortcutUndo:
 		ed.undo()
 	case *fyne.ShortcutPaste:
@@ -798,19 +924,104 @@ func (ed *codeEditor) Tapped(ev *fyne.PointEvent) {
 	if c := fyne.CurrentApp().Driver().CanvasForObject(ed); c != nil {
 		c.Focus(ed)
 	}
+	if d, ok := fyne.CurrentApp().Driver().(desktop.Driver); ok {
+		if d.CurrentKeyModifiers()&fyne.KeyModifierControl != 0 {
+			return
+		}
+	}
 	ed.setCursorFromPoint(ev.Position)
 }
 
+func (ed *codeEditor) MouseDown(ev *desktop.MouseEvent) {
+	if ev.Button != desktop.MouseButtonPrimary {
+		return
+	}
+	if ev.Modifier&fyne.KeyModifierControl != 0 && ed.onGoToDefinition != nil {
+		gridPos := ed.gridPointFromEditorPoint(ev.Position)
+		row, col := ed.grid.CursorLocationForPosition(gridPos)
+		textCol := col - ed.gutterCols()
+		if textCol < 0 {
+			textCol = 0
+		}
+		lines := ed.lines()
+		if row < 0 || row >= len(lines) {
+			return
+		}
+		line := lines[row]
+		byteCol := 0
+		for i := 0; i < textCol && byteCol < len(line); i++ {
+			_, size := utf8.DecodeRuneInString(line[byteCol:])
+			byteCol += size
+		}
+		ed.onGoToDefinition(row, byteCol)
+		return
+	}
+}
+
+func (ed *codeEditor) MouseUp(*desktop.MouseEvent) {}
+
+func (ed *codeEditor) MouseIn(*desktop.MouseEvent) {}
+
+func (ed *codeEditor) MouseMoved(ev *desktop.MouseEvent) {
+	if ed.onHover == nil || ed.grid == nil {
+		return
+	}
+	gridPos := ed.gridPointFromEditorPoint(ev.Position)
+	row, col := ed.grid.CursorLocationForPosition(gridPos)
+	textCol := col - ed.gutterCols()
+	if textCol < 0 {
+		ed.hideLSPPopups()
+		return
+	}
+	lines := ed.lines()
+	if row < 0 || row >= len(lines) {
+		ed.hideLSPPopups()
+		return
+	}
+	line := lines[row]
+	byteCol := 0
+	for i := 0; i < textCol && byteCol < len(line); i++ {
+		_, size := utf8.DecodeRuneInString(line[byteCol:])
+		byteCol += size
+	}
+	_, _, word := identifierAt(ed.text, row, byteCol)
+	if word == "" {
+		ed.hideLSPPopups()
+		return
+	}
+	ed.scheduleHover(row, byteCol)
+}
+
+func (ed *codeEditor) MouseOut() {
+	if ed.hoverTimer != nil {
+		ed.hoverTimer.Stop()
+	}
+	ed.hideLSPPopups()
+}
+
+var _ desktop.Mouseable = (*codeEditor)(nil)
+var _ desktop.Hoverable = (*codeEditor)(nil)
+
 type codeEditorRenderer struct {
-	editor  *codeEditor
-	scroll  *container.Scroll
-	caret   *canvas.Rectangle
-	overlay *fyne.Container
+	editor    *codeEditor
+	scroll    *container.Scroll
+	caret     *canvas.Rectangle
+	overlay   *fyne.Container
+	hover     *fyne.Container
+	signature *fyne.Container
 }
 
 func (r *codeEditorRenderer) Layout(size fyne.Size) {
 	r.scroll.Resize(size)
 	r.scroll.Move(fyne.NewPos(0, 0))
+	if r.hover != nil {
+		r.hover.Resize(size)
+		r.hover.Move(fyne.NewPos(0, 0))
+	}
+	if r.signature != nil {
+		r.signature.Resize(size)
+		r.signature.Move(fyne.NewPos(0, 0))
+	}
 	r.editor.updateCaret()
 	r.layoutCompletion()
 }
@@ -838,7 +1049,7 @@ func (r *codeEditorRenderer) Refresh() {
 }
 
 func (r *codeEditorRenderer) Objects() []fyne.CanvasObject {
-	return []fyne.CanvasObject{r.scroll, r.caret, r.overlay}
+	return []fyne.CanvasObject{r.scroll, r.caret, r.overlay, r.hover, r.signature}
 }
 
 func (r *codeEditorRenderer) Destroy() {

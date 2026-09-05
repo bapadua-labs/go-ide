@@ -1,5 +1,86 @@
 # Changelog
 
+## Ícones nos menus
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `main.go` | Ícones do tema Fyne em todos os itens dos menus **Arquivo**, **Exibir**, **Terminal**, **Executar** e **Navegação** |
+
+### Comportamento
+
+- Cada item de menu exibe um ícone à esquerda do rótulo (documento, pasta, salvar, play, busca, etc.)
+- Pastas recentes usam ícone de pasta
+- Atalhos de teclado existentes permanecem inalterados
+
+---
+
+## Correção de popups LSP (hover e assinatura)
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `lsp_util.go` | `plainTextFromMarkdown`, `wrapPlainText` e `expandSnippet` para sanitizar conteúdo LSP |
+| `lsp_util_test.go` | Testes de conversão markdown, quebra de linha e expansão de snippets |
+| `lsp_popup.go` | Popup com `widget.Label` e quebra de linha (substitui `canvas.Text` monolíneo) |
+| `code_editor.go` | Posicionamento do hover abaixo da linha; expansão de snippets ao aceitar autocomplete |
+
+### Problema corrigido
+
+**Caracteres especiais sobrepondo o código:** ao passar o mouse sobre um identificador, a documentação markdown do gopls (blocos `` ``` ``, separadores `---`, etc.) era renderizada em uma única linha longa sobre o texto do editor, gerando caracteres `` e texto fantasma ilegível.
+
+### Solução
+
+1. Markdown convertido para texto simples antes de exibir (remove fences, separadores e formatação inline)
+2. Texto quebrado em linhas com largura máxima de 480 px
+3. Popup posicionado **abaixo** da linha do cursor, não sobre ela
+4. Snippets LSP (`${1:nome}`, `$0`) expandidos ao aceitar autocomplete
+5. Caractere `▸` substituído por `>` na ajuda de assinatura (evita glifo ausente na fonte monoespaçada)
+
+---
+
+## Recursos LSP do gopls
+
+### Novos arquivos
+
+| Arquivo | Descrição |
+|---|---|
+| `gopls_client.go` | Handler LSP do cliente (`PublishDiagnostics`) |
+| `lsp_util.go` | Conversão de locations, hover, rename, diagnósticos e aplicação de `WorkspaceEdit` |
+| `lsp_popup.go` | Popups de hover e signature help; estilo visual de diagnósticos |
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `gopls.go` | Capabilities LSP ampliadas; métodos `definition`, `references`, `hover`, `signatureHelp`, `rename` |
+| `gopls_integration.go` | Integração de navegação, referências, rename, hover, signature help e diagnósticos |
+| `code_editor.go` | Sublinhado de diagnósticos, hover com mouse, Ctrl+clique, popups LSP |
+| `main.go` | Menu **Navegação** e atalhos F12, Shift+F12, F2 |
+
+### Recursos
+
+| Recurso | Comportamento |
+|---|---|
+| **Ir para definição** | F12 ou Ctrl+clique — abre o arquivo e posiciona o cursor na declaração (inclui stdlib e módulos) |
+| **Encontrar referências** | Shift+F12 — lista todas as ocorrências; clique navega até ela |
+| **Diagnósticos** | Erros e avisos do gopls sublinhados em tempo real via `PublishDiagnostics` |
+| **Renomear símbolo** | F2 — renomeia em todos os arquivos do workspace via `WorkspaceEdit` |
+| **Signature help** | Ao digitar `(` — balão com assinatura e parâmetro ativo |
+| **Hover** | Mouse sobre identificador — documentação do gopls (debounce 400 ms) |
+
+### Atalhos
+
+| Ação | Atalho |
+|---|---|
+| Ir para definição | **F12** ou **Ctrl+clique** |
+| Encontrar referências | **Shift+F12** |
+| Renomear símbolo | **F2** |
+
+---
+
 ## Persistência de estado da IDE
 
 ### Novos arquivos
@@ -302,3 +383,11 @@ go build -o go-ide .
 10. Use **Ctrl+W** (ou **Arquivo → Fechar**) para fechar a IDE
 11. Feche a IDE com uma pasta aberta e reinicie — a última pasta deve reabrir automaticamente
 12. Abra pastas diferentes e verifique em **Arquivo** a lista de pastas recentes abaixo de "Abrir pasta..."
+13. Com um `.go` aberto e pasta de projeto: **F12** ou **Ctrl+clique** em um símbolo — deve ir à definição
+14. **Shift+F12** em um identificador — lista referências; clique em uma linha para navegar
+15. Introduza um erro de sintaxe — o trecho deve aparecer sublinhado; passe o mouse para ver a mensagem
+16. **F2** para renomear uma função/struct — confirme que todas as ocorrências no projeto foram atualizadas
+17. Digite `fmt.Println(` — deve aparecer ajuda de assinatura abaixo do cursor
+18. Passe o mouse sobre `fmt` ou outro identificador — documentação em popup legível, abaixo da linha, sem sobrepor o código
+19. Verifique os ícones nos menus **Arquivo**, **Navegação**, **Exibir**, **Terminal** e **Executar**
+20. Aceite um autocomplete com snippet (ex.: `func`) — placeholders `${1:...}` e `$0` não devem aparecer no código

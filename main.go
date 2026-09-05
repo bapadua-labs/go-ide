@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/theme"
 )
 
 type editor struct {
@@ -54,6 +55,12 @@ func main() {
 		ed.fetchCompletions(row, col)
 	}
 	ed.entry.onAppShortcut = ed.handleAppShortcut
+	ed.entry.onGoToDefinition = ed.goToDefinitionAt
+	ed.entry.onFindReferences = ed.findReferencesAt
+	ed.entry.onRename = ed.renameSymbolAt
+	ed.entry.onHover = ed.fetchHover
+	ed.entry.onSignatureHelp = ed.fetchSignatureHelp
+	ed.setupGoplsFeatures()
 
 	ed.buildMenu()
 	ed.setupShortcuts()
@@ -83,22 +90,22 @@ func main() {
 }
 
 func (ed *editor) buildMenu() {
-	newItem := fyne.NewMenuItem("Novo", ed.newFile)
-	openItem := fyne.NewMenuItem("Abrir...", ed.openFile)
-	openFolderItem := fyne.NewMenuItem("Abrir pasta...", ed.openFolder)
-	saveItem := fyne.NewMenuItem("Salvar", ed.saveFile)
+	newItem := fyne.NewMenuItemWithIcon("Novo", theme.DocumentCreateIcon(), ed.newFile)
+	openItem := fyne.NewMenuItemWithIcon("Abrir...", theme.DocumentIcon(), ed.openFile)
+	openFolderItem := fyne.NewMenuItemWithIcon("Abrir pasta...", theme.FolderOpenIcon(), ed.openFolder)
+	saveItem := fyne.NewMenuItemWithIcon("Salvar", theme.DocumentSaveIcon(), ed.saveFile)
 	saveItem.Shortcut = &desktop.CustomShortcut{
 		KeyName:  fyne.KeyS,
 		Modifier: fyne.KeyModifierControl,
 	}
-	saveAsItem := fyne.NewMenuItem("Salvar como...", ed.saveFileAs)
-	formatItem := fyne.NewMenuItem("Formatar documento", ed.formatDocument)
+	saveAsItem := fyne.NewMenuItemWithIcon("Salvar como...", theme.DownloadIcon(), ed.saveFileAs)
+	formatItem := fyne.NewMenuItemWithIcon("Formatar documento", theme.ViewRefreshIcon(), ed.formatDocument)
 	formatItem.Shortcut = &desktop.CustomShortcut{
 		KeyName:  fyne.KeyF,
 		Modifier: fyne.KeyModifierShift | fyne.KeyModifierAlt,
 	}
-	propertiesItem := fyne.NewMenuItem("Propriedades...", ed.showProperties)
-	closeItem := fyne.NewMenuItem("Fechar", ed.confirmClose)
+	propertiesItem := fyne.NewMenuItemWithIcon("Propriedades...", theme.InfoIcon(), ed.showProperties)
+	closeItem := fyne.NewMenuItemWithIcon("Fechar", theme.CancelIcon(), ed.confirmClose)
 	closeItem.Shortcut = &desktop.CustomShortcut{
 		KeyName:  fyne.KeyW,
 		Modifier: fyne.KeyModifierControl,
@@ -108,28 +115,45 @@ func (ed *editor) buildMenu() {
 	fileItems = append(fileItems, ed.recentFolderMenuItems()...)
 	fileItems = append(fileItems, saveItem, saveAsItem, formatItem, propertiesItem, closeItem)
 	fileMenu := fyne.NewMenu("Arquivo", fileItems...)
-	quitItem := fyne.NewMenuItem("Sair", ed.confirmClose)
+	quitItem := fyne.NewMenuItemWithIcon("Sair", theme.LogoutIcon(), ed.confirmClose)
 	fileMenu.Items = append(fileMenu.Items, quitItem)
 
-	toggleTermItem := fyne.NewMenuItem("Terminal", ed.toggleTerminal)
+	toggleTermItem := fyne.NewMenuItemWithIcon("Terminal", theme.ComputerIcon(), ed.toggleTerminal)
 	toggleTermItem.Shortcut = &desktop.CustomShortcut{
 		KeyName:  fyne.KeyBackTick,
 		Modifier: fyne.KeyModifierControl,
 	}
 	viewMenu := fyne.NewMenu("Exibir", toggleTermItem)
 
-	newTermTabItem := fyne.NewMenuItem("Nova aba", ed.openTerminalTab)
+	newTermTabItem := fyne.NewMenuItemWithIcon("Nova aba", theme.ContentAddIcon(), ed.openTerminalTab)
 	newTermTabItem.Shortcut = &desktop.CustomShortcut{
 		KeyName:  fyne.KeyT,
 		Modifier: fyne.KeyModifierControl | fyne.KeyModifierShift,
 	}
 	termMenu := fyne.NewMenu("Terminal", newTermTabItem)
 
-	runFileItem := fyne.NewMenuItem("Executar arquivo", ed.runCurrentFile)
+	runFileItem := fyne.NewMenuItemWithIcon("Executar arquivo", theme.MediaPlayIcon(), ed.runCurrentFile)
 	runFileItem.Shortcut = &desktop.CustomShortcut{KeyName: fyne.KeyF5}
 	runMenu := fyne.NewMenu("Executar", runFileItem)
 
-	ed.window.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu, termMenu, runMenu))
+	goDefItem := fyne.NewMenuItemWithIcon("Ir para definição", theme.NavigateNextIcon(), func() {
+		ed.goToDefinitionAt(ed.entry.CursorRow(), ed.entry.CursorCol())
+	})
+	goDefItem.Shortcut = &desktop.CustomShortcut{KeyName: fyne.KeyF12}
+	findRefsItem := fyne.NewMenuItemWithIcon("Encontrar referências", theme.SearchIcon(), func() {
+		ed.findReferencesAt(ed.entry.CursorRow(), ed.entry.CursorCol())
+	})
+	findRefsItem.Shortcut = &desktop.CustomShortcut{
+		KeyName:  fyne.KeyF12,
+		Modifier: fyne.KeyModifierShift,
+	}
+	renameItem := fyne.NewMenuItemWithIcon("Renomear símbolo", theme.SearchReplaceIcon(), func() {
+		ed.renameSymbolAt(ed.entry.CursorRow(), ed.entry.CursorCol())
+	})
+	renameItem.Shortcut = &desktop.CustomShortcut{KeyName: fyne.KeyF2}
+	navMenu := fyne.NewMenu("Navegação", goDefItem, findRefsItem, renameItem)
+
+	ed.window.SetMainMenu(fyne.NewMainMenu(fileMenu, navMenu, viewMenu, termMenu, runMenu))
 }
 
 func (ed *editor) setupShortcuts() {
@@ -162,6 +186,18 @@ func (ed *editor) setupShortcuts() {
 	}, func(_ fyne.Shortcut) {
 		ed.confirmClose()
 	})
+	ed.window.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyF12}, func(_ fyne.Shortcut) {
+		ed.goToDefinitionAt(ed.entry.CursorRow(), ed.entry.CursorCol())
+	})
+	ed.window.Canvas().AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyF12,
+		Modifier: fyne.KeyModifierShift,
+	}, func(_ fyne.Shortcut) {
+		ed.findReferencesAt(ed.entry.CursorRow(), ed.entry.CursorCol())
+	})
+	ed.window.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyF2}, func(_ fyne.Shortcut) {
+		ed.renameSymbolAt(ed.entry.CursorRow(), ed.entry.CursorCol())
+	})
 }
 
 func (ed *editor) handleAppShortcut(shortcut fyne.Shortcut) {
@@ -171,6 +207,18 @@ func (ed *editor) handleAppShortcut(shortcut fyne.Shortcut) {
 	}
 	if cs.KeyName == fyne.KeyW && cs.Modifier == fyne.KeyModifierControl {
 		ed.confirmClose()
+		return
+	}
+	if cs.KeyName == fyne.KeyF12 && cs.Modifier == fyne.KeyModifierShift {
+		ed.findReferencesAt(ed.entry.CursorRow(), ed.entry.CursorCol())
+		return
+	}
+	if cs.KeyName == fyne.KeyF12 && cs.Modifier == 0 {
+		ed.goToDefinitionAt(ed.entry.CursorRow(), ed.entry.CursorCol())
+		return
+	}
+	if cs.KeyName == fyne.KeyF2 {
+		ed.renameSymbolAt(ed.entry.CursorRow(), ed.entry.CursorCol())
 	}
 }
 
@@ -262,7 +310,7 @@ func (ed *editor) recentFolderMenuItems() []*fyne.MenuItem {
 		if label == "" || label == "." || label == string(os.PathSeparator) {
 			label = folderPath
 		}
-		item := fyne.NewMenuItem(label, func() {
+		item := fyne.NewMenuItemWithIcon(label, theme.FolderIcon(), func() {
 			ed.openFolderPath(folderPath)
 		})
 		items = append(items, item)
@@ -284,7 +332,7 @@ func (ed *editor) openFolderPath(path string) {
 		dialog.ShowError(os.ErrNotExist, ed.window)
 		return
 	}
-	ed.rootPath = filepath.Clean(path)
+	ed.rootPath = normalizePath(path)
 	ed.explorer.setRoot(ed.rootPath)
 	ed.terminal.setWorkingDir(ed.rootPath)
 	ed.ensureGopls()
@@ -304,6 +352,7 @@ func (ed *editor) openFileFromExplorer(path string) {
 }
 
 func (ed *editor) loadFile(path string) {
+	path = normalizePath(path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		dialog.ShowError(err, ed.window)
@@ -317,6 +366,7 @@ func (ed *editor) loadFile(path string) {
 	ed.entry.SetText(string(data))
 	ed.filePath = path
 	ed.modified = false
+	ed.entry.SetDiagnostics(nil)
 	ed.updateTitle()
 
 	if ed.rootPath == "" {
