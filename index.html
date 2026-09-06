@@ -82,7 +82,7 @@
           </div>
           <div class="feature-card">
             <h4>Editor com numeração</h4>
-            <p>TextGrid com gutter de linhas, caret piscante e clique para posicionar o cursor.</p>
+            <p>TextGrid com gutter de linhas, caret piscante, Tab no estilo gofmt e clique para posicionar o cursor.</p>
           </div>
           <div class="feature-card">
             <h4>Seleção de texto</h4>
@@ -106,7 +106,7 @@
           </div>
           <div class="feature-card">
             <h4>Terminal integrado</h4>
-            <p>Shell interativo com execução de <code>go run</code> via F5.</p>
+            <p>Shell interativo; F5 mostra a saída do <code>go run</code> numa aba com scroll.</p>
           </div>
           <div class="feature-card">
             <h4>Persistência de estado</h4>
@@ -229,11 +229,12 @@ go build -o go-ide .
         <ul class="tips">
           <li>Caret vertical piscante (2px), visível a cada 530 ms com foco.</li>
           <li>Clique do mouse reposiciona o cursor na linha/coluna correta.</li>
+          <li><kbd>Tab</kbd> insere <code>\t</code> (tabulação gofmt), com largura visual de 8 colunas — o Fyne não rouba mais a tecla para trocar o foco.</li>
           <li>Seleção por arraste, Shift+setas/Home/End, Shift+clique ou Ctrl+A, com highlight visual.</li>
           <li>Backspace/Delete apagam a seleção; digitar ou colar substitui o intervalo.</li>
           <li>Ctrl+C / Ctrl+X copiam ou recortam só o trecho selecionado.</li>
           <li>Pilha de undo com até 100 entradas (Ctrl+Z).</li>
-          <li>Formatação via <code>goimports</code> (Shift+Alt+F).</li>
+          <li>Formatação via <code>goimports</code> (Shift+Alt+F); ao salvar <code>.go</code>, goimports roda antes de gravar.</li>
         </ul>
       </section>
 
@@ -311,26 +312,27 @@ go build -o go-ide .
       <section class="section" id="terminal">
         <h2>Terminal e execução</h2>
         <p class="lead">
-          Painel de terminal PTY embutido na parte inferior do editor. A execução
-          via F5 usa <code>exec.Command</code> diretamente, exibindo apenas a
-          saída do programa.
+          Painel inferior com abas de shell PTY e uma aba <strong>Saída</strong>
+          para o resultado do F5. A execução usa <code>exec.Command</code> e
+          exibe só a saída do programa, com scroll.
         </p>
 
         <div class="two-col">
           <div>
             <h3>Execução (F5)</h3>
             <ul>
-              <li>Abre o terminal automaticamente se estiver fechado e foca o painel</li>
-              <li>Aguarda o PTY real (não o <code>discardWriter</code> inicial) antes de executar</li>
+              <li>Abre o painel na aba <strong>Saída</strong> (não injeta no PTY do shell)</li>
+              <li>Scroll vertical e horizontal para revisitar saídas longas</li>
+              <li>Texto selecionável (duplo clique / arrastar) para copiar</li>
               <li>Resolve <code>go</code> pelo GOROOT configurado ou pelo PATH</li>
-              <li>Injeta <code>GOROOT</code> no ambiente do processo (evita preferência desatualizada)</li>
+              <li>Injeta <code>GOROOT</code> e <code>$GOROOT/bin</code> no PATH dos filhos</li>
               <li>Captura stdout/stderr sem ecoar o comando</li>
-              <li>Sem prompts <code>&gt;</code> de heredoc na saída</li>
             </ul>
           </div>
           <div>
-            <h3>Pasta e foco</h3>
+            <h3>Shell e foco</h3>
             <ul>
+              <li>Abas <strong>Terminal</strong> continuam com shell PTY interativo</li>
               <li>Ao abrir uma pasta, o shell ativo recebe <code>cd</code> só com o PTY pronto</li>
               <li>Ctrl+` / menu reabre o painel com foco no terminal (Ctrl+X chega ao shell)</li>
               <li><strong>Shift+Alt+F</strong> — formata com <code>goimports</code></li>
@@ -353,6 +355,7 @@ go build -o go-ide .
           </thead>
           <tbody>
             <tr><td>Desfazer</td><td><kbd>Ctrl</kbd> + <kbd>Z</kbd></td></tr>
+            <tr><td>Indentação (tab Go)</td><td><kbd>Tab</kbd></td></tr>
             <tr><td>Copiar / Colar / Recortar</td><td><kbd>Ctrl</kbd> + <kbd>C</kbd> / <kbd>V</kbd> / <kbd>X</kbd></td></tr>
             <tr><td>Selecionar tudo</td><td><kbd>Ctrl</kbd> + <kbd>A</kbd></td></tr>
             <tr><td>Estender seleção</td><td><kbd>Shift</kbd> + setas / <kbd>Home</kbd> / <kbd>End</kbd></td></tr>
@@ -413,6 +416,32 @@ go build -o go-ide .
         <p class="lead">Histórico das principais funcionalidades implementadas.</p>
 
         <div class="changelog">
+          <article class="changelog-entry">
+            <h3>v1.0.8 — Tab no editor (tabulação Go)</h3>
+            <p>
+              <code>AcceptsTab</code> faz o Fyne entregar Tab ao editor; insere
+              <code>\t</code> (gofmt) com largura visual de 8 colunas; cursor e
+              clique respeitam os tab stops.
+            </p>
+            <ul>
+              <li><code>code_editor.go</code> — <code>fyne.Tabbable</code>, insert de tab e expansão visual</li>
+              <li><code>code_editor_test.go</code> — Tab, Shift+Tab e conversão visual↔byte</li>
+            </ul>
+          </article>
+
+          <article class="changelog-entry">
+            <h3>v1.0.7 — Scroll na saída de execução (F5)</h3>
+            <p>
+              F5 passa a usar a aba <strong>Saída</strong> com scroll em vez do
+              PTY do terminal (sem scrollback). Shell interativo permanece nas
+              abas Terminal.
+            </p>
+            <ul>
+              <li><code>terminal_panel.go</code> — aba Saída com <code>container.Scroll</code> e texto selecionável</li>
+              <li><code>run.go</code> — abre o painel na Saída antes de executar</li>
+            </ul>
+          </article>
+
           <article class="changelog-entry">
             <h3>Detecção e correção do GOROOT</h3>
             <p>
@@ -528,9 +557,10 @@ go build -o go-ide .
         </div>
         <ol class="tips">
           <li>Abra um arquivo <code>.go</code> e verifique realce de sintaxe e rainbow brackets.</li>
+          <li>Aperte <strong>Tab</strong> — deve indentar com <code>\t</code> (largura 8), sem trocar o foco.</li>
           <li>Selecione texto com o mouse ou Shift+setas; teste Ctrl+C / Ctrl+X e Backspace sobre a seleção.</li>
           <li>Use <strong>Arquivo → Formatar documento</strong> (Shift+Alt+F).</li>
-          <li>Pressione <strong>F5</strong> para executar — o terminal abre e exibe só a saída.</li>
+          <li>Pressione <strong>F5</strong> — a aba Saída abre com scroll e o resultado do programa.</li>
           <li>Abra uma pasta com código Go e teste autocomplete (<code>fmt.</code>).</li>
           <li><strong>F12</strong> ou Ctrl+clique para ir à definição; <strong>Shift+F12</strong> para referências.</li>
           <li>Introduza um erro — sublinhado com mensagem ao passar o mouse.</li>
