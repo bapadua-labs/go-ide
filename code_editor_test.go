@@ -143,3 +143,59 @@ func TestCodeEditorCutClearsSelection(t *testing.T) {
 		t.Fatal("seleção deveria ser limpa")
 	}
 }
+
+func TestCodeEditorAcceptsTab(t *testing.T) {
+	ed := &codeEditor{}
+	if !ed.AcceptsTab() {
+		t.Fatal("codeEditor deve aceitar Tab (fyne.Tabbable)")
+	}
+}
+
+func TestCodeEditorTypedKeyTabInsertsGoTab(t *testing.T) {
+	ed := &codeEditor{text: "func() {", cursorRow: 0, cursorCol: 8}
+	ed.TypedKey(&fyne.KeyEvent{Name: fyne.KeyTab})
+	if ed.text != "func() {\t" {
+		t.Fatalf("Tab deve inserir \\t (gofmt): %q", ed.text)
+	}
+	if ed.cursorCol != 9 {
+		t.Fatalf("cursor após Tab: %d", ed.cursorCol)
+	}
+}
+
+func TestCodeEditorTypedKeyShiftTabDoesNotInsert(t *testing.T) {
+	ed := &codeEditor{text: "x", cursorRow: 0, cursorCol: 1, shiftDown: true}
+	ed.TypedKey(&fyne.KeyEvent{Name: fyne.KeyTab})
+	if ed.text != "x" {
+		t.Fatalf("Shift+Tab não deve inserir: %q", ed.text)
+	}
+}
+
+func TestVisualColAtByteGoTabs(t *testing.T) {
+	line := "\thello"
+	if got := visualColAtByte(line, 0, goTabWidth); got != 0 {
+		t.Fatalf("col 0: %d", got)
+	}
+	if got := visualColAtByte(line, 1, goTabWidth); got != 8 {
+		t.Fatalf("após tab: %d want 8", got)
+	}
+	if got := visualColAtByte(line, 2, goTabWidth); got != 9 {
+		t.Fatalf("após 'h': %d want 9", got)
+	}
+}
+
+func TestByteColAtVisualGoTabs(t *testing.T) {
+	line := "\thello"
+	if got := byteColAtVisual(line, 0, goTabWidth); got != 0 {
+		t.Fatalf("visual 0: %d", got)
+	}
+	if got := byteColAtVisual(line, 4, goTabWidth); got != 0 {
+		t.Fatalf("meio do tab deve mapear para o \\t: %d", got)
+	}
+	if got := byteColAtVisual(line, 8, goTabWidth); got != 1 {
+		t.Fatalf("tab stop: %d want 1", got)
+	}
+	if got := byteColAtVisual(line, 9, goTabWidth); got != 2 {
+		t.Fatalf("após h: %d want 2", got)
+	}
+}
+

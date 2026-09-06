@@ -29,15 +29,12 @@ func (ed *editor) runCurrentFile() {
 	dir := filepath.Dir(ed.filePath)
 	fileName := filepath.Base(ed.filePath)
 
-	ed.ensureTerminalOpen()
+	ed.ensureOutputPanelOpen()
 	ed.terminal.runGoFile(goBin, ed.goPath(), dir, fileName)
 }
 
-func (ed *editor) ensureTerminalOpen() {
+func (ed *editor) ensureOutputPanelOpen() {
 	ed.termPanelOpen = true
-	if ed.terminal.tabCount() == 0 {
-		ed.terminal.newTab()
-	}
+	ed.terminal.ensureOutputTab()
 	ed.syncTerminalPanel()
-	ed.terminal.focusActive()
 }

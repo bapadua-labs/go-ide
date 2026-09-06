@@ -1,12 +1,9 @@
 package main
 
 import (
-	"encoding/base64"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +11,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/widget"
 	"github.com/fyne-io/terminal"
 )
 
@@ -23,6 +21,10 @@ type termPanel struct {
 	panel      fyne.CanvasObject
 	workingDir string
 	onChange   func(int)
+
+	outputTab    *container.TabItem
+	outputLabel  *widget.Label
+	outputScroll *container.Scroll
 
 	readyMu sync.Mutex
 	ready   map[*terminal.Terminal]chan struct{}
@@ -42,6 +44,11 @@ func newTermPanel(w fyne.Window, startDir string, onChange func(int)) *termPanel
 		return tab
 	}
 	tp.tabs.OnClosed = func(tab *container.TabItem) {
+		if tab == tp.outputTab {
+			tp.outputTab = nil
+			tp.outputLabel = nil
+			tp.outputScroll = nil
+		}
 		if t := tp.terminalFromTab(tab); t != nil {
 			tp.clearReady(t)
 		}
@@ -118,6 +125,49 @@ func (tp *termPanel) createTab(startDir string) *container.TabItem {
 	}()
 
 	return tab
+}
+
+func (tp *termPanel) ensureOutputTab() *container.TabItem {
+	if tp.outputTab != nil {
+		for _, item := range tp.tabs.Items {
+			if item == tp.outputTab {
+				return tp.outputTab
+			}
+		}
+		tp.outputTab = nil
+		tp.outputLabel = nil
+		tp.outputScroll = nil
+	}
+
+	label := widget.NewLabel("")
+	label.TextStyle = fyne.TextStyle{Monospace: true}
+	label.Wrapping = fyne.TextWrapOff
+	label.Importance = widget.MediumImportance
+	label.Selectable = true
+
+	scroll := container.NewScroll(label)
+	scroll.Direction = container.ScrollBoth
+
+	tp.outputLabel = label
+	tp.outputScroll = scroll
+	tp.outputTab = container.NewTabItem("Saída", scroll)
+	tp.tabs.Append(tp.outputTab)
+	tp.notifyChange()
+	return tp.outputTab
+}
+
+func (tp *termPanel) showOutput(text string) {
+	tab := tp.ensureOutputTab()
+	if tp.outputLabel == nil || tp.outputScroll == nil {
+		return
+	}
+	if text == "" {
+		text = "(sem saída)\n"
+	}
+	tp.outputLabel.SetText(text)
+	tp.outputScroll.Offset = fyne.NewPos(0, 0)
+	tp.outputScroll.Refresh()
+	tp.tabs.Select(tab)
 }
 
 func (tp *termPanel) armReady(t *terminal.Terminal) {
@@ -213,19 +263,22 @@ func (tp *termPanel) runCommand(command string) {
 }
 
 func (tp *termPanel) runGoFile(goBin, goroot, dir, file string) {
-	tp.whenReady(func(t *terminal.Terminal) {
-		go func() {
-			cmd := exec.Command(goBin, "run", file)
-			cmd.Dir = dir
-			cmd.Env = withGoRootEnv(os.Environ(), goroot)
-			out, err := cmd.CombinedOutput()
-			text := string(out)
-			if err != nil && text == "" {
-				text = err.Error() + "\n"
-			}
-			tp.displayOutput(t, text)
-		}()
+	fyne.Do(func() {
+		tp.showOutput("Executando " + file + "…\n")
 	})
+	go func() {
+		cmd := exec.Command(goBin, "run", file)
+		cmd.Dir = dir
+		cmd.Env = withGoRootEnv(os.Environ(), goroot)
+		out, err := cmd.CombinedOutput()
+		text := string(out)
+		if err != nil && text == "" {
+			text = err.Error() + "\n"
+		}
+		fyne.Do(func() {
+			tp.showOutput(text)
+		})
+	}()
 }
 
 func (tp *termPanel) whenReady(fn func(*terminal.Terminal)) {
@@ -246,29 +299,6 @@ func (tp *termPanel) whenReady(fn func(*terminal.Terminal)) {
 		time.Sleep(100 * time.Millisecond)
 		fyne.Do(func() { fn(t) })
 	}()
-}
-
-func (tp *termPanel) displayOutput(t *terminal.Terminal, output string) {
-	var script string
-	if runtime.GOOS == "windows" {
-		escaped := strings.ReplaceAll(output, "'", "''")
-		script = fmt.Sprintf("Clear-Host; Write-Output '%s'\n", escaped)
-	} else {
-		encoded := base64.StdEncoding.EncodeToString([]byte(output))
-		// Comando de uma linha evita prompts PS2 (>) do heredoc em shell interativo.
-		script = fmt.Sprintf(
-			"stty -echo 2>/dev/null; clear; printf '%%s' '%s' | base64 -d; stty echo 2>/dev/null\n",
-			encoded,
-		)
-	}
-
-	payload := []byte(script)
-	for range 20 {
-		if _, err := t.Write(payload); err == nil {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
 }
 
 func shellQuote(s string) string {

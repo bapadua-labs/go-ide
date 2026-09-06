@@ -1,5 +1,49 @@
 # Changelog
 
+## v1.0.8 — Tab no editor (tabulação Go)
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `code_editor.go` | `AcceptsTab` para o Fyne entregar Tab ao editor; insere `\t` (gofmt); largura visual 8 |
+| `code_editor_test.go` | Cobertura de Tab, Shift+Tab e conversão visual↔byte |
+
+### Problema corrigido
+
+**Resumo:** ao apertar Tab no editor, nada acontecia — o Fyne usava a tecla só para trocar o foco entre widgets.
+
+### Solução
+
+- O editor passa a implementar `fyne.Tabbable` (`AcceptsTab() == true`)
+- Tab insere um caractere de tabulação (`\t`), como o gofmt espera
+- Tabs são exibidos com largura 8 colunas; o cursor e o clique respeitam os tab stops
+- Shift+Tab ainda não desindenta (não insere tab)
+
+---
+
+## v1.0.7 — Scroll na saída de execução (F5)
+
+### Alterações
+
+| Arquivo | Descrição |
+|---|---|
+| `terminal_panel.go` | Aba **Saída** com `container.Scroll` para o resultado do `go run`; F5 deixa de injetar no PTY; texto selecionável |
+| `run.go` | Abre o painel inferior na aba Saída antes de executar |
+
+### Problema corrigido
+
+**Resumo:** com muitas linhas de saída, o terminal integrado (fyne-io/terminal) não tem scrollback — as linhas antigas sumiam e não dava para rever a execução inteira.
+
+### Solução
+
+- F5 passa a exibir o resultado numa aba **Saída** com scroll vertical e horizontal
+- O shell interativo (abas **Terminal**) permanece separado, sem mudança de comportamento
+- Enquanto o programa roda, a aba mostra `Executando arquivo…` e depois o texto completo
+- Duplo clique (ou arrastar) na Saída seleciona texto para copiar
+
+---
+
 ## v1.0.6 — goimports no PATH + formatar ao salvar
 
 ### Alterações

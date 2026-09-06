@@ -17,6 +17,9 @@ import (
 const caretWidth = 2
 const maxUndoStack = 100
 
+// goTabWidth é a largura visual do tab usada pelo gofmt (8 colunas).
+const goTabWidth = 8
+
 type editorSnapshot struct {
 	text      string
 	cursorRow int
@@ -73,8 +76,14 @@ func newCodeEditor() *codeEditor {
 	}
 	ed.grid.ShowLineNumbers = true
 	ed.grid.Scroll = fyne.ScrollNone
+	ed.grid.TabWidth = goTabWidth
 	ed.ExtendBaseWidget(ed)
 	return ed
+}
+
+// AcceptsTab faz o Fyne entregar Tab ao editor em vez de trocar o foco.
+func (ed *codeEditor) AcceptsTab() bool {
+	return true
 }
 
 func (ed *codeEditor) CreateRenderer() fyne.WidgetRenderer {
@@ -202,6 +211,9 @@ func (ed *codeEditor) TypedKey(ev *fyne.KeyEvent) {
 	case fyne.KeyTab:
 		if ed.acceptCompletion() {
 			return
+		}
+		if ed.modifierShift() {
+			return // Shift+Tab: não insere tab (desindentação fica para depois)
 		}
 		ed.insertString("\t")
 	case fyne.KeyEscape:
@@ -403,14 +415,60 @@ func (ed *codeEditor) cursorDisplayCol() int {
 	if ed.cursorRow < 0 || ed.cursorRow >= len(lines) {
 		return 0
 	}
-	line := lines[ed.cursorRow]
-	col := 0
-	for i := 0; i < ed.cursorCol && i < len(line); {
-		_, size := utf8.DecodeRuneInString(line[i:])
-		i += size
-		col++
+	return visualColAtByte(lines[ed.cursorRow], ed.cursorCol, goTabWidth)
+}
+
+// nextTabStop retorna a próxima coluna de tab stop após (ou em) col.
+func nextTabStop(col, tabWidth int) int {
+	if tabWidth <= 0 {
+		tabWidth = goTabWidth
 	}
-	return col
+	return ((col / tabWidth) + 1) * tabWidth
+}
+
+// visualColAtByte converte offset em bytes na linha para coluna visual (tabs expandem).
+func visualColAtByte(line string, byteCol, tabWidth int) int {
+	if byteCol > len(line) {
+		byteCol = len(line)
+	}
+	if byteCol < 0 {
+		byteCol = 0
+	}
+	vis := 0
+	for i := 0; i < byteCol; {
+		r, size := utf8.DecodeRuneInString(line[i:])
+		i += size
+		if r == '\t' {
+			vis = nextTabStop(vis, tabWidth)
+		} else {
+			vis++
+		}
+	}
+	return vis
+}
+
+// byteColAtVisual converte coluna visual para offset em bytes na linha.
+func byteColAtVisual(line string, visualCol, tabWidth int) int {
+	if visualCol <= 0 {
+		return 0
+	}
+	vis := 0
+	byteCol := 0
+	for byteCol < len(line) && vis < visualCol {
+		r, size := utf8.DecodeRuneInString(line[byteCol:])
+		if r == '\t' {
+			next := nextTabStop(vis, tabWidth)
+			if visualCol < next {
+				return byteCol
+			}
+			vis = next
+			byteCol += size
+			continue
+		}
+		vis++
+		byteCol += size
+	}
+	return byteCol
 }
 
 func (ed *codeEditor) caretPosition() fyne.Position {
@@ -462,15 +520,7 @@ func (ed *codeEditor) rowColFromPoint(pos fyne.Position) (int, int) {
 	}
 
 	line := lines[row]
-	byteCol := 0
-	for i := 0; i < textCol && byteCol < len(line); i++ {
-		_, size := utf8.DecodeRuneInString(line[byteCol:])
-		byteCol += size
-	}
-	if textCol > utf8.RuneCountInString(line) {
-		byteCol = len(line)
-	}
-	return row, byteCol
+	return row, byteColAtVisual(line, textCol, goTabWidth)
 }
 
 func (ed *codeEditor) startCursorBlink() {
@@ -1063,6 +1113,12 @@ func (ed *codeEditor) doRefreshGrid(size fyne.Size) {
 				style.BGColor = selBG
 			}
 			cells = append(cells, widget.TextGridCell{Rune: r, Style: style})
+			if r == '\t' {
+				next := nextTabStop(len(cells)-1, goTabWidth)
+				for len(cells) < next {
+					cells = append(cells, widget.TextGridCell{Rune: ' ', Style: style})
+				}
+			}
 			col += size
 			bytePos += size
 		}
@@ -1083,6 +1139,7 @@ func (ed *codeEditor) doRefreshGrid(size fyne.Size) {
 
 var _ desktop.Keyable = (*codeEditor)(nil)
 var _ fyne.Shortcutable = (*codeEditor)(nil)
+var _ fyne.Tabbable = (*codeEditor)(nil)
 
 func (ed *codeEditor) TypedShortcut(shortcut fyne.Shortcut) {
 	switch s := shortcut.(type) {
